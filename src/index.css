@@ -68,4 +68,28 @@ body::before {
     right: -20px;
     background: radial-gradient(circle, rgba(45, 129, 137, 0.34), transparent 70%);
   }
+
+  .dashboard-card {
+    @apply rounded-2xl border border-black/10 bg-white/80 p-4;
+  }
+
+  .metric-label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/65;
+  }
+
+  .metric-value {
+    @apply mt-1 font-heading text-3xl text-ink;
+  }
+
+  .metric-note {
+    @apply mt-1 text-xs text-ink/65;
+  }
+
+  .table-head {
+    @apply px-3 py-2 text-xs uppercase tracking-[0.12em] text-ink/55;
+  }
+
+  .table-cell {
+    @apply border-y border-black/5 bg-white/70 px-3 py-2 text-ink/70;
+  }
 }
