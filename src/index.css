@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 35 54% 94%;
+  --ink: 210 30% 14%;
+  --panel: 43 64% 98%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: hsl(var(--ink));
+  font-family: 'Manrope', sans-serif;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(202, 90, 46, 0.25), transparent 35%),
+    radial-gradient(circle at 86% 88%, rgba(45, 129, 137, 0.22), transparent 28%),
+    linear-gradient(140deg, #f6efe4, #f4e4d2 52%, #f7f5ed 100%);
+}
+
+body::before {
+  content: '';
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(rgba(20, 29, 45, 0.07) 0.5px, transparent 0.5px);
+  background-size: 3px 3px;
+  opacity: 0.45;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-[2rem] border border-black/10 bg-[hsl(var(--panel)/0.9)] shadow-mellow backdrop-blur-sm;
+  }
+
+  .font-heading {
+    font-family: 'Fraunces', serif;
+  }
+
+  .text-ink {
+    color: hsl(var(--ink));
+  }
+
+  .bg-orb-1,
+  .bg-orb-2 {
+    @apply pointer-events-none absolute h-64 w-64 rounded-full blur-3xl;
+  }
+
+  .bg-orb-1 {
+    top: -90px;
+    left: -80px;
+    background: radial-gradient(circle, rgba(202, 90, 46, 0.35), transparent 68%);
+  }
+
+  .bg-orb-2 {
+    bottom: -90px;
+    right: -20px;
+    background: radial-gradient(circle, rgba(45, 129, 137, 0.34), transparent 70%);
+  }
+}
