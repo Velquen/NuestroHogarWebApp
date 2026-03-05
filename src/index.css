@@ -160,8 +160,19 @@ body::before {
     padding-bottom: 0.125rem;
   }
 
+  .task-list-scroll-mobile {
+    max-height: var(--task-list-max-h);
+    overflow-y: auto;
+    padding-right: 0.2rem;
+    padding-bottom: 0.1rem;
+  }
+
   .task-list-scroll::-webkit-scrollbar {
     width: 8px;
+  }
+
+  .task-list-scroll-mobile::-webkit-scrollbar {
+    width: 6px;
   }
 
   .task-list-scroll::-webkit-scrollbar-track {
@@ -169,7 +180,17 @@ body::before {
     border-radius: 999px;
   }
 
+  .task-list-scroll-mobile::-webkit-scrollbar-track {
+    background: color-mix(in oklab, var(--muted) 55%, transparent);
+    border-radius: 999px;
+  }
+
   .task-list-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--primary) 45%, var(--accent));
+    border-radius: 999px;
+  }
+
+  .task-list-scroll-mobile::-webkit-scrollbar-thumb {
     background: color-mix(in oklab, var(--primary) 45%, var(--accent));
     border-radius: 999px;
   }
@@ -236,11 +257,209 @@ body::before {
   .task-field-number {
     @apply w-full border-0 bg-transparent py-1 text-sm font-semibold text-ink outline-none ring-0;
   }
+
+  .recent-log-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .recent-log-empty {
+    border: 1px dashed color-mix(in oklab, var(--border) 65%, transparent);
+    background: linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--card) 94%, white),
+      color-mix(in oklab, var(--muted) 72%, white)
+    );
+    @apply flex items-start gap-3 rounded-[1.25rem] px-3.5 py-3;
+  }
+
+  .recent-log-empty-icon {
+    border: 1px solid color-mix(in oklab, var(--primary) 18%, transparent);
+    background: color-mix(in oklab, var(--primary) 12%, white);
+    color: color-mix(in oklab, var(--primary) 76%, var(--foreground));
+    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl;
+  }
+
+  .recent-log-card {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--recent-log-border, color-mix(in oklab, var(--border) 72%, transparent));
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, white 55%, transparent),
+        transparent 42%
+      ),
+      linear-gradient(
+        135deg,
+        color-mix(in oklab, var(--recent-log-soft, var(--card)) 88%, white),
+        color-mix(in oklab, var(--card) 96%, white)
+      );
+    box-shadow: inset 0 1px 0 color-mix(in oklab, white 70%, transparent);
+    transition:
+      transform 180ms ease,
+      border-color 180ms ease,
+      background-color 180ms ease;
+    @apply rounded-[1.45rem];
+  }
+
+  .recent-log-card::after {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(
+        90deg,
+        color-mix(in oklab, var(--recent-log-accent, var(--primary)) 10%, transparent) 0,
+        transparent 18%
+      ),
+      repeating-linear-gradient(
+        180deg,
+        transparent 0,
+        transparent 34px,
+        color-mix(in oklab, var(--recent-log-border, var(--border)) 32%, transparent) 34px,
+        color-mix(in oklab, var(--recent-log-border, var(--border)) 32%, transparent) 35px
+      );
+    opacity: 0.52;
+  }
+
+  .recent-log-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in oklab, var(--recent-log-accent, var(--primary)) 28%, white);
+  }
+
+  .recent-log-rail,
+  .recent-log-shell {
+    position: relative;
+    z-index: 1;
+  }
+
+  .recent-log-rail {
+    position: absolute;
+    top: 0.72rem;
+    bottom: 0.72rem;
+    left: 0.72rem;
+    width: 0.3rem;
+    border-radius: 999px;
+    background: var(--recent-log-accent, var(--primary));
+    box-shadow: 0 0 0 1px color-mix(in oklab, white 30%, transparent);
+  }
+
+  .recent-log-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.78rem 0.82rem 0.78rem 1.35rem;
+  }
+
+  .recent-log-top {
+    @apply flex items-start justify-between gap-2;
+  }
+
+  .recent-log-tags {
+    @apply flex flex-wrap items-center gap-1.5;
+  }
+
+  .recent-log-tag,
+  .recent-log-stamp {
+    border: 1px solid color-mix(in oklab, var(--recent-log-accent, var(--primary)) 16%, white);
+    background: var(--recent-log-chip, color-mix(in oklab, var(--card) 90%, white));
+    color: color-mix(in oklab, var(--recent-log-accent, var(--foreground)) 62%, var(--foreground));
+    @apply inline-flex items-center rounded-full px-2 py-[0.22rem] text-[9px] font-semibold uppercase tracking-[0.12em];
+  }
+
+  .recent-log-stamp {
+    background: color-mix(in oklab, var(--recent-log-accent, var(--primary)) 10%, white);
+  }
+
+  .recent-log-body {
+    @apply min-w-0;
+  }
+
+  .recent-log-title {
+    font-family: 'Fraunces', var(--font-serif), serif;
+    @apply text-[1rem] leading-tight text-ink;
+  }
+
+  .recent-log-meta {
+    color: color-mix(in oklab, var(--foreground) 62%, transparent);
+    @apply mt-0.5 text-[11px];
+  }
+
+  .recent-log-delete {
+    border: 1px solid color-mix(in oklab, var(--destructive) 24%, white);
+    background: color-mix(in oklab, var(--destructive) 8%, white);
+    color: color-mix(in oklab, var(--destructive) 72%, var(--foreground));
+    @apply inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[1.2rem] font-semibold leading-none transition hover:border-red-400 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-70;
+  }
+}
+
+@media (max-width: 1023px) {
+  :root {
+    --task-item-height: 3.9rem;
+    --task-list-visible-items: 5;
+  }
+
+  .panel {
+    border-radius: 1.45rem;
+  }
+
+  .dashboard-card {
+    padding: 0.85rem;
+  }
+
+  .metric-value {
+    font-size: 1.75rem;
+    line-height: 1.06;
+  }
+
+  .recent-log-shell {
+    padding: 0.72rem 0.76rem 0.72rem 1.28rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .task-field-select-task {
+    padding-right: 5.9rem;
+  }
+
+  .recent-log-card::after {
+    opacity: 0.42;
+  }
+
+  .recent-log-title {
+    font-size: 0.96rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .task-field-select-wrap {
+    flex-wrap: wrap;
+    row-gap: 0.4rem;
+  }
+
+  .task-field-select-task {
+    padding-left: 2.4rem;
+    padding-right: 2rem;
+  }
+
+  .task-field-badge {
+    position: static;
+    transform: none;
+    margin-left: auto;
+    margin-right: 1.8rem;
+  }
+
+  .task-field-caret-overlay {
+    right: 0.45rem;
+  }
 }
 
 @layer base {
   .theme {
-    --font-sans: Libre Baskerville, serif;
+    --font-sans: Manrope, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
     --radius: 0.5rem;
@@ -284,7 +503,7 @@ body::before {
     --sidebar-accent-foreground: oklch(0.3220 0.0300 45.8000);
     --sidebar-border: oklch(0.8500 0.0200 78.5000);
     --sidebar-ring: oklch(0.6260 0.1270 46.2000);
-    --font-sans: Libre Baskerville, serif;
+    --font-sans: Manrope, sans-serif;
     --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     --shadow-color: oklch(0 0 0);
@@ -339,7 +558,7 @@ body::before {
     --sidebar-accent-foreground: oklch(0.9430 0.0130 87.0000);
     --sidebar-border: oklch(0.3900 0.0180 49.0000);
     --sidebar-ring: oklch(0.7080 0.1120 49.0000);
-    --font-sans: Libre Baskerville, serif;
+    --font-sans: Manrope, sans-serif;
     --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     --shadow-color: oklch(0 0 0);

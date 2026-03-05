@@ -1,5 +1,6 @@
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bar,
   CartesianGrid,
@@ -15,24 +16,32 @@ import {
   YAxis,
 } from 'recharts';
 import { fetchCommunityDashboard } from './api/community';
-import type { MemberName } from './types/community';
+import { createCommunity, updateMyProfileSettings } from './api/profile';
+import {
+  createCommunityTask,
+  createTaskCategory,
+  createTaskLog,
+  deleteTaskLog,
+  deactivateCommunityTask,
+  fetchCommunityTasks,
+  fetchMyRecentTaskLogs,
+  fetchTaskCategories,
+  type CommunityTask as ApiCommunityTask,
+  type RecentTaskLog as ApiRecentTaskLog,
+} from './api/tasks';
+import {
+  isValidProfileIconKey,
+  profileIconOptions,
+  renderProfileIcon,
+  type ProfileAvatarIconKey,
+} from './lib/profile-icons';
+import { getSupabaseClient, isSupabaseConfigured } from './lib/supabase';
+import type { MemberName, WeeklyActivity } from './types/community';
 
-interface LoggedTask {
-  id: string;
-  member: MemberName;
-  date: string;
-  day: string;
-  task: string;
-  count: number;
-}
+type DailyOverviewRow = WeeklyActivity & { total: number };
 
-interface CommunityTask {
-  id: string;
-  name: string;
-  category: string;
-  score: number;
-  createdAt: string;
-}
+type CommunityTask = ApiCommunityTask;
+type RecentTaskLog = ApiRecentTaskLog;
 
 type ToastVariant = 'success' | 'error';
 
@@ -42,30 +51,12 @@ interface AppToast {
   variant: ToastVariant;
 }
 
-const initialCommunityTasks: CommunityTask[] = [
-  {
-    id: 'task-base-1',
-    name: 'Lavar platos',
-    category: 'Cocina',
-    score: 4,
-    createdAt: getTodayIsoDate(),
-  },
-  {
-    id: 'task-base-2',
-    name: 'Sacar basura',
-    category: 'Limpieza',
-    score: 3,
-    createdAt: getTodayIsoDate(),
-  },
-  {
-    id: 'task-base-3',
-    name: 'Limpiar baño',
-    category: 'Baño',
-    score: 6,
-    createdAt: getTodayIsoDate(),
-  },
-];
-const initialTaskCategories = Array.from(new Set(initialCommunityTasks.map((task) => task.category)));
+interface RecentLogTone {
+  accent: string;
+  border: string;
+  chip: string;
+  soft: string;
+}
 
 const weekdayMap: Record<string, string> = {
   lunes: 'Lunes',
@@ -85,48 +76,116 @@ const getScoreBadgeClass = (score: number) =>
       : 'border-lime-200 bg-lime-100 text-lime-800';
 
 function App() {
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['community-dashboard'],
+  const queryClient = useQueryClient();
+  const [session, setSession] = useState<Session | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [isLoginSubmitting, setIsLoginSubmitting] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setIsAuthReady(true);
+      return;
+    }
+
+    const supabase = getSupabaseClient();
+    let isMounted = true;
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!isMounted) {
+        return;
+      }
+
+      if (error) {
+        setLoginError(error.message);
+      }
+
+      setSession(data.session ?? null);
+      setIsAuthReady(true);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setSession(nextSession);
+      if (nextSession) {
+        setLoginError(null);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['community-dashboard', session?.user.id],
     queryFn: fetchCommunityDashboard,
+    enabled: isSupabaseConfigured && isAuthReady && Boolean(session),
+  });
+
+  const activeCommunityId = data?.communityId ?? null;
+  const { data: tasksData = [] } = useQuery({
+    queryKey: ['community-tasks', activeCommunityId],
+    queryFn: () => fetchCommunityTasks(activeCommunityId ?? ''),
+    enabled: isSupabaseConfigured && isAuthReady && Boolean(session) && Boolean(activeCommunityId),
+  });
+  const { data: categoriesData = [] } = useQuery({
+    queryKey: ['task-categories', activeCommunityId],
+    queryFn: () => fetchTaskCategories(activeCommunityId ?? ''),
+    enabled: isSupabaseConfigured && isAuthReady && Boolean(session) && Boolean(activeCommunityId),
+  });
+  const { data: myRecentTaskLogs = [] } = useQuery({
+    queryKey: ['my-recent-task-logs', activeCommunityId, session?.user.id],
+    queryFn: () => fetchMyRecentTaskLogs(activeCommunityId ?? '', 5),
+    enabled: isSupabaseConfigured && isAuthReady && Boolean(session) && Boolean(activeCommunityId),
   });
 
   const [taskDate, setTaskDate] = useState(() => getTodayIsoDate());
   const [taskDescription, setTaskDescription] = useState('');
-  const [taskCount, setTaskCount] = useState(1);
   const [formMessage, setFormMessage] = useState<string | null>(null);
-  const [taskEntries, setTaskEntries] = useState<LoggedTask[]>([]);
-  const [communityTasks, setCommunityTasks] = useState<CommunityTask[]>(initialCommunityTasks);
+  const [isDeletingTaskEntryId, setIsDeletingTaskEntryId] = useState<string | null>(null);
+  const [communityTasks, setCommunityTasks] = useState<CommunityTask[]>([]);
+  const [taskFilterCategory, setTaskFilterCategory] = useState('');
   const [communityTaskName, setCommunityTaskName] = useState('');
-  const [taskCategories, setTaskCategories] = useState<string[]>(initialTaskCategories);
-  const [communityTaskCategory, setCommunityTaskCategory] = useState(initialTaskCategories[0] ?? '');
+  const [taskCategories, setTaskCategories] = useState<string[]>([]);
+  const [communityTaskCategory, setCommunityTaskCategory] = useState('');
   const [isCreateCategoryOpen, setIsCreateCategoryOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [communityTaskScore, setCommunityTaskScore] = useState(4);
   const [toasts, setToasts] = useState<AppToast[]>([]);
-  const [isMobileTasksOpen, setIsMobileTasksOpen] = useState(false);
+  const [isMobileTasksOpen, setIsMobileTasksOpen] = useState(true);
   const [isMobileCreateTaskOpen, setIsMobileCreateTaskOpen] = useState(false);
   const [taskToDelete, setTaskToDelete] = useState<CommunityTask | null>(null);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [profileAliasDraft, setProfileAliasDraft] = useState('');
+  const [profileIconDraft, setProfileIconDraft] = useState<ProfileAvatarIconKey>('leaf_svg');
+  const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [newCommunityName, setNewCommunityName] = useState('');
+  const [isCreateCommunityOpen, setIsCreateCommunityOpen] = useState(false);
+  const [isCreateCommunityConfirmOpen, setIsCreateCommunityConfirmOpen] = useState(false);
+  const [isCreatingCommunity, setIsCreatingCommunity] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDayLabel = useMemo(() => toDayLabel(taskDate), [taskDate]);
   const todayLabel = useMemo(() => toDayLabel(getTodayIsoDate()), []);
   const todayIsoDate = useMemo(() => getTodayIsoDate(), []);
 
-  const weeklyActivities = useMemo(() => {
+  const weeklyActivities = useMemo<WeeklyActivity[]>(() => {
     if (!data) {
       return [];
     }
 
-    const merged = data.weeklyActivities.map((day) => ({ ...day }));
-
-    for (const entry of taskEntries) {
-      const dayRecord = merged.find((day) => day.day === entry.day);
-      if (dayRecord) {
-        dayRecord[entry.member] += entry.count;
-      }
-    }
-
-    return merged;
-  }, [data, taskEntries]);
+    return data.weeklyActivities.map((day) => ({ ...day }));
+  }, [data]);
 
   const totalsByMember = useMemo(() => {
     if (!data) {
@@ -134,7 +193,7 @@ function App() {
     }
 
     return data.members.map((member) => {
-      const completed = weeklyActivities.reduce((acc, day) => acc + day[member.name], 0);
+      const completed = weeklyActivities.reduce((acc, day) => acc + Number(day[member.name] ?? 0), 0);
       return {
         ...member,
         completed,
@@ -142,33 +201,19 @@ function App() {
     });
   }, [data, weeklyActivities]);
 
-  const dailyOverview = useMemo(() => {
+  const dailyOverview = useMemo<DailyOverviewRow[]>(() => {
     if (!data) {
       return [];
     }
 
     return weeklyActivities.map((day) => {
-      const total = data.members.reduce((acc, member) => acc + day[member.name], 0);
+      const total = data.members.reduce((acc, member) => acc + Number(day[member.name] ?? 0), 0);
       return {
         ...day,
         total,
       };
     });
   }, [data, weeklyActivities]);
-
-  const memberColorMap = useMemo(() => {
-    if (!data) {
-      return {} as Record<MemberName, string>;
-    }
-
-    return data.members.reduce(
-      (acc, member) => {
-        acc[member.name] = member.color;
-        return acc;
-      },
-      {} as Record<MemberName, string>,
-    );
-  }, [data]);
 
   const weeklyTotal = useMemo(
     () => dailyOverview.reduce((acc, day) => acc + day.total, 0),
@@ -209,9 +254,22 @@ function App() {
     return dailyOverview.reduce((best, day) => (day.total > best.total ? day : best));
   }, [dailyOverview]);
 
-  const profileMember = data?.members[0];
-  const activeMember: MemberName = profileMember?.name ?? 'Gaspar';
+  const currentUserId = data?.currentUserId;
+  const profileMember =
+    data?.members.find((member) => member.userId === currentUserId) ?? data?.members[0];
+  const activeMember: MemberName = profileMember?.name ?? 'Integrante';
   const activeMemberProfile = profileMember;
+
+  useEffect(() => {
+    if (!profileMember) {
+      return;
+    }
+
+    setProfileAliasDraft(profileMember.alias ?? profileMember.baseName);
+    const nextIcon = profileMember.avatarIconKey;
+    setProfileIconDraft(nextIcon && isValidProfileIconKey(nextIcon) ? nextIcon : 'leaf_svg');
+    setIsIconPickerOpen(false);
+  }, [profileMember]);
 
   const todayForActiveMember = useMemo(() => {
     if (!dailyOverview.length) {
@@ -219,13 +277,24 @@ function App() {
     }
 
     const dayRecord = dailyOverview.find((day) => day.day === todayLabel);
-    return dayRecord ? dayRecord[activeMember] : 0;
+    return dayRecord ? Number(dayRecord[activeMember] ?? 0) : 0;
   }, [dailyOverview, activeMember, todayLabel]);
 
   const isTodaySelected = taskDate === todayIsoDate;
+  const taskFilterCategories = useMemo(
+    () => Array.from(new Set(communityTasks.map((task) => task.category))),
+    [communityTasks],
+  );
+  const filteredCommunityTasks = useMemo(
+    () =>
+      taskFilterCategory
+        ? communityTasks.filter((task) => task.category === taskFilterCategory)
+        : communityTasks,
+    [communityTasks, taskFilterCategory],
+  );
   const selectedCommunityTask = useMemo(
-    () => communityTasks.find((task) => task.name === taskDescription) ?? null,
-    [communityTasks, taskDescription],
+    () => filteredCommunityTasks.find((task) => task.name === taskDescription) ?? null,
+    [filteredCommunityTasks, taskDescription],
   );
   const selectedTaskBadgeClass = selectedCommunityTask
     ? getScoreBadgeClass(selectedCommunityTask.score)
@@ -250,17 +319,30 @@ function App() {
     }));
   }, [totalsByMember]);
 
-  const memberNameByDataKey: Record<MemberName, string> = {
-    Gaspar: 'Gaspar',
-    Cristobal: 'Cristobal',
-    Fernanda: 'Fernanda',
-  };
+  useEffect(() => {
+    setCommunityTasks(tasksData);
+  }, [tasksData]);
 
   useEffect(() => {
-    if (!taskDescription && communityTasks.length > 0) {
-      setTaskDescription(communityTasks[0].name);
+    setTaskCategories(categoriesData);
+  }, [categoriesData]);
+
+  useEffect(() => {
+    if (taskFilterCategory && !taskFilterCategories.includes(taskFilterCategory)) {
+      setTaskFilterCategory('');
     }
-  }, [communityTasks, taskDescription]);
+  }, [taskFilterCategories, taskFilterCategory]);
+
+  useEffect(() => {
+    if (!taskDescription && filteredCommunityTasks.length > 0) {
+      setTaskDescription(filteredCommunityTasks[0].name);
+      return;
+    }
+
+    if (taskDescription && !filteredCommunityTasks.some((task) => task.name === taskDescription)) {
+      setTaskDescription(filteredCommunityTasks[0]?.name ?? '');
+    }
+  }, [filteredCommunityTasks, taskDescription]);
 
   useEffect(() => {
     if (!communityTaskCategory && taskCategories.length > 0) {
@@ -273,6 +355,37 @@ function App() {
     }
   }, [taskCategories, communityTaskCategory]);
 
+  useEffect(() => {
+    if (!isProfileMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setIsProfileMenuOpen(false);
+        setIsIconPickerOpen(false);
+        setIsCreateCommunityOpen(false);
+        setIsCreateCommunityConfirmOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsProfileMenuOpen(false);
+        setIsIconPickerOpen(false);
+        setIsCreateCommunityOpen(false);
+        setIsCreateCommunityConfirmOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [isProfileMenuOpen]);
+
   const showToast = (message: string, variant: ToastVariant = 'success') => {
     const id = `toast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -283,39 +396,213 @@ function App() {
     }, 3000);
   };
 
-  const handleTaskSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleProfileSave = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const description = taskDescription.trim();
-    if (!description) {
+    if (!profileMember) {
+      showToast('No se encontró un perfil activo.', 'error');
+      return;
+    }
+
+    const trimmedAlias = profileAliasDraft.trim();
+    if (trimmedAlias.length > 0 && trimmedAlias.length < 2) {
+      showToast('El alias debe tener al menos 2 caracteres.', 'error');
+      return;
+    }
+    if (trimmedAlias.length > 32) {
+      showToast('El alias no puede superar 32 caracteres.', 'error');
+      return;
+    }
+
+    setIsSavingProfile(true);
+    try {
+      await updateMyProfileSettings({
+        alias: trimmedAlias.length > 0 ? trimmedAlias : null,
+        avatarIconKey: profileIconDraft,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['community-dashboard'] });
+      setIsProfileMenuOpen(false);
+      setIsIconPickerOpen(false);
+      setIsCreateCommunityOpen(false);
+      setIsCreateCommunityConfirmOpen(false);
+      showToast('Perfil actualizado.');
+    } catch (updateError) {
+      const message = updateError instanceof Error ? updateError.message : 'No se pudo actualizar el perfil.';
+      showToast(message, 'error');
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handlePrepareCreateCommunity = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const communityName = newCommunityName.trim();
+    if (communityName.length < 3) {
+      showToast('El nombre de la comunidad debe tener al menos 3 caracteres.', 'error');
+      return;
+    }
+    if (communityName.length > 64) {
+      showToast('El nombre de la comunidad no puede superar 64 caracteres.', 'error');
+      return;
+    }
+
+    setIsCreateCommunityConfirmOpen(true);
+  };
+
+  const handleConfirmCreateCommunity = async () => {
+    const communityName = newCommunityName.trim();
+    if (!communityName) {
+      showToast('Escribe un nombre para la comunidad.', 'error');
+      return;
+    }
+
+    setIsCreatingCommunity(true);
+    try {
+      const created = await createCommunity(communityName);
+      setNewCommunityName('');
+      setIsCreateCommunityOpen(false);
+      setIsCreateCommunityConfirmOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['community-dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['community-tasks'] }),
+        queryClient.invalidateQueries({ queryKey: ['task-categories'] }),
+      ]);
+      showToast(`Comunidad creada: "${created.name}".`);
+    } catch (creationError) {
+      const message =
+        creationError instanceof Error ? creationError.message : 'No se pudo crear la comunidad.';
+      showToast(message, 'error');
+    } finally {
+      setIsCreatingCommunity(false);
+    }
+  };
+
+  const handleLoginSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!isSupabaseConfigured) {
+      setLoginError('Configura VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.');
+      return;
+    }
+
+    const email = loginEmail.trim();
+    if (!email || !loginPassword) {
+      setLoginError('Completa correo y contraseña.');
+      return;
+    }
+
+    setIsLoginSubmitting(true);
+    setLoginError(null);
+
+    try {
+      const supabase = getSupabaseClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password: loginPassword,
+      });
+
+      if (signInError) {
+        throw signInError;
+      }
+    } catch (authError) {
+      const message = authError instanceof Error ? authError.message : 'No se pudo iniciar sesión.';
+      setLoginError(message);
+    } finally {
+      setIsLoginSubmitting(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (!isSupabaseConfigured) {
+      return;
+    }
+
+    const supabase = getSupabaseClient();
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) {
+      showToast(`No se pudo cerrar sesión: ${signOutError.message}`, 'error');
+      return;
+    }
+
+    setFormMessage(null);
+    setTaskDescription('');
+    setIsProfileMenuOpen(false);
+    setIsIconPickerOpen(false);
+    setNewCommunityName('');
+    setIsCreateCommunityOpen(false);
+    setIsCreateCommunityConfirmOpen(false);
+    await queryClient.invalidateQueries({ queryKey: ['community-dashboard'] });
+  };
+
+  const handleTaskSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!activeCommunityId) {
+      setFormMessage('No se encontró una comunidad activa.');
+      return;
+    }
+
+    if (!selectedCommunityTask) {
       setFormMessage('Escribe una tarea antes de registrar.');
       return;
     }
 
-    const safeCount = Math.max(1, Math.floor(taskCount));
+    const safeCount = 1;
     const dayLabel = toDayLabel(taskDate);
 
-    const newEntry: LoggedTask = {
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      member: activeMember,
-      date: taskDate,
-      day: dayLabel,
-      task: description,
-      count: safeCount,
-    };
-
-    setTaskEntries((prev) => [newEntry, ...prev].slice(0, 10));
-    if (communityTasks.length > 0) {
-      setTaskDescription(communityTasks[0].name);
-    } else {
-      setTaskDescription('');
+    try {
+      await createTaskLog(selectedCommunityTask.id, activeCommunityId, taskDate, safeCount);
+      if (filteredCommunityTasks.length > 0) {
+        setTaskDescription(filteredCommunityTasks[0].name);
+      } else {
+        setTaskDescription('');
+      }
+      setFormMessage(`Registrado: ${safeCount} tarea(s) para el integrante activo en ${dayLabel}.`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['community-dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-recent-task-logs'] }),
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo registrar la tarea.';
+      setFormMessage(message);
     }
-    setTaskCount(1);
-    setFormMessage(`Registrado: ${safeCount} tarea(s) para el integrante activo en ${dayLabel}.`);
   };
 
-  const handleCommunityTaskCreate = (event: FormEvent<HTMLFormElement>) => {
+  const handleDeleteTaskEntry = async (entry: RecentTaskLog) => {
+    const confirmed = window.confirm(
+      `¿Eliminar este registro?\n\n${entry.taskName} (${toDayLabel(entry.performedOn)}, ${formatDateLabel(
+        entry.performedOn,
+      )})`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingTaskEntryId(entry.id);
+    try {
+      await deleteTaskLog(entry.id);
+      setFormMessage(`Registro eliminado: ${entry.taskName}.`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['community-dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-recent-task-logs'] }),
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo eliminar el registro.';
+      setFormMessage(message);
+    } finally {
+      setIsDeletingTaskEntryId(null);
+    }
+  };
+
+  const handleCommunityTaskCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (!activeCommunityId) {
+      showToast('No se encontró una comunidad activa.', 'error');
+      return;
+    }
 
     const name = communityTaskName.trim();
     const category = communityTaskCategory.trim();
@@ -329,21 +616,33 @@ function App() {
     }
 
     const safeScore = Math.min(7, Math.max(2, Math.floor(communityTaskScore)));
-    const newTask: CommunityTask = {
-      id: `task-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      name,
-      category,
-      score: safeScore,
-      createdAt: getTodayIsoDate(),
-    };
 
-    setCommunityTasks((prev) => [newTask, ...prev]);
-    setCommunityTaskName('');
-    setCommunityTaskScore(4);
-    showToast(`Tarea creada: "${name}" (${category}) con puntuación ${safeScore}.`);
+    try {
+      await createCommunityTask({
+        communityId: activeCommunityId,
+        name,
+        categoryName: category,
+        score: safeScore,
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['community-tasks', activeCommunityId] }),
+        queryClient.invalidateQueries({ queryKey: ['task-categories', activeCommunityId] }),
+      ]);
+      setCommunityTaskName('');
+      setCommunityTaskScore(4);
+      showToast(`Tarea creada: "${name}" (${category}) con puntuación ${safeScore}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo crear la tarea.';
+      showToast(message, 'error');
+    }
   };
 
-  const handleCategoryCreate = () => {
+  const handleCategoryCreate = async () => {
+    if (!activeCommunityId) {
+      showToast('No se encontró una comunidad activa.', 'error');
+      return;
+    }
+
     const categoryName = newCategoryName.trim();
     if (!categoryName) {
       showToast('Escribe un nombre para la categoría.', 'error');
@@ -359,32 +658,197 @@ function App() {
       return;
     }
 
-    setTaskCategories((previous) => [categoryName, ...previous]);
-    setCommunityTaskCategory(categoryName);
-    setNewCategoryName('');
-    setIsCreateCategoryOpen(false);
-    showToast(`Categoría creada: "${categoryName}".`);
+    try {
+      await createTaskCategory(activeCommunityId, categoryName);
+      await queryClient.invalidateQueries({ queryKey: ['task-categories', activeCommunityId] });
+      setCommunityTaskCategory(categoryName);
+      setNewCategoryName('');
+      setIsCreateCategoryOpen(false);
+      showToast(`Categoría creada: "${categoryName}".`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo crear la categoría.';
+      showToast(message, 'error');
+    }
   };
 
-  const handleConfirmDeleteTask = () => {
+  const handleConfirmDeleteTask = async () => {
     if (!taskToDelete) {
       return;
     }
 
-    setCommunityTasks((previous) => {
-      const next = previous.filter((task) => task.id !== taskToDelete.id);
-      const selectedTaskStillExists = next.some((task) => task.name === taskDescription);
-
-      if (!selectedTaskStillExists) {
-        setTaskDescription(next[0]?.name ?? '');
+    try {
+      await deactivateCommunityTask(taskToDelete.id);
+      if (activeCommunityId) {
+        await queryClient.invalidateQueries({ queryKey: ['community-tasks', activeCommunityId] });
       }
-
-      return next;
-    });
-
-    showToast(`Tarea eliminada: "${taskToDelete.name}".`);
-    setTaskToDelete(null);
+      showToast(`Tarea eliminada: "${taskToDelete.name}".`);
+      setTaskToDelete(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo eliminar la tarea.';
+      showToast(message, 'error');
+    }
   };
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8">
+        <div className="bg-orb-1" aria-hidden />
+        <div className="bg-orb-2" aria-hidden />
+        <main className="relative z-10 mx-auto flex w-full max-w-4xl flex-col gap-6">
+          <section className="panel overflow-hidden p-6 sm:p-10">
+            <div className="grid gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+              <article>
+                <p className="text-xs uppercase tracking-[0.2em] text-ink/58">Nuestro Hogar</p>
+                <h1 className="mt-2 font-heading text-4xl text-ink sm:text-5xl">Activa tu conexión</h1>
+                <p className="mt-4 max-w-lg text-sm text-ink/72 sm:text-base">
+                  Falta configurar variables de entorno para conectar esta app con Supabase.
+                </p>
+              </article>
+              <article className="rounded-2xl border border-amber-900/15 bg-white/80 p-5">
+                <p className="metric-label">Variables requeridas</p>
+                <pre className="mt-3 overflow-x-auto rounded-xl bg-amber-950/90 p-3 text-xs text-amber-50">
+{`VITE_SUPABASE_URL=https://<project>.supabase.co
+VITE_SUPABASE_ANON_KEY=<publishable_key>`}
+                </pre>
+                <p className="mt-3 text-xs text-ink/65">
+                  Crea o actualiza `.env`, reinicia `npm run dev` y vuelve a cargar.
+                </p>
+              </article>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (!isAuthReady) {
+    return (
+      <div className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8">
+        <div className="bg-orb-1" aria-hidden />
+        <div className="bg-orb-2" aria-hidden />
+        <main className="relative z-10 mx-auto flex w-full max-w-3xl flex-col gap-6">
+          <section className="panel p-8 text-center sm:p-12">
+            <p className="text-xs uppercase tracking-[0.18em] text-ink/58">Conectando</p>
+            <h1 className="mt-2 font-heading text-4xl text-ink">Validando sesión</h1>
+            <p className="mt-3 text-sm text-ink/68">Un momento mientras verificamos tu acceso.</p>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8">
+        <div className="bg-orb-1" aria-hidden />
+        <div className="bg-orb-2" aria-hidden />
+        <main className="relative z-10 mx-auto flex w-full max-w-5xl flex-col gap-6">
+          <section className="panel relative overflow-hidden p-6 sm:p-10">
+            <div className="absolute -right-10 -top-8 h-36 w-36 rounded-full bg-amber-200/45 blur-2xl" aria-hidden />
+            <div className="absolute -bottom-12 -left-8 h-40 w-40 rounded-full bg-lime-200/40 blur-3xl" aria-hidden />
+            <div className="relative grid gap-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+              <article>
+                <p className="text-xs uppercase tracking-[0.22em] text-ink/55">Portal Privado</p>
+                <h1 className="mt-2 max-w-lg font-heading text-4xl leading-tight text-ink sm:text-5xl">
+                  Entra a tu comunidad y registra tus tareas reales
+                </h1>
+                <p className="mt-4 max-w-xl text-sm text-ink/72 sm:text-base">
+                  Inicia sesión con tu cuenta de Supabase para ver integrantes, tareas de la comunidad
+                  y métricas del período.
+                </p>
+                <div className="mt-6 grid gap-2 text-sm text-ink/70">
+                  <p>1. Accede con correo y contraseña.</p>
+                  <p>2. La app carga tu comunidad activa automáticamente.</p>
+                  <p>3. Desde ahí ya puedes registrar tareas y puntos.</p>
+                </div>
+              </article>
+
+              <form
+                onSubmit={handleLoginSubmit}
+                className="rounded-[1.6rem] border border-amber-900/14 bg-white/86 p-5 shadow-lg backdrop-blur-sm sm:p-6"
+              >
+                <p className="text-xs uppercase tracking-[0.16em] text-ink/58">Iniciar sesión</p>
+                <h2 className="mt-1 font-heading text-3xl text-ink">Bienvenido</h2>
+
+                <label className="mt-5 block space-y-1.5">
+                  <span className="metric-label">Correo</span>
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    value={loginEmail}
+                    onChange={(event) => setLoginEmail(event.target.value)}
+                    placeholder="tu@correo.com"
+                    className="w-full rounded-xl border border-black/12 bg-white/92 px-3 py-2.5 text-sm text-ink outline-none transition focus:border-black/30"
+                  />
+                </label>
+
+                <label className="mt-4 block space-y-1.5">
+                  <span className="metric-label">Contraseña</span>
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={loginPassword}
+                    onChange={(event) => setLoginPassword(event.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-xl border border-black/12 bg-white/92 px-3 py-2.5 text-sm text-ink outline-none transition focus:border-black/30"
+                  />
+                </label>
+
+                {loginError && (
+                  <p className="mt-4 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {loginError}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isLoginSubmitting}
+                  className="btn-primary mt-5 inline-flex w-full items-center justify-center disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isLoginSubmitting ? 'Ingresando...' : 'Entrar a mi comunidad'}
+                </button>
+              </form>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (isError && !data) {
+    const dashboardErrorMessage =
+      error instanceof Error ? error.message : 'No fue posible cargar los datos de tu comunidad.';
+
+    return (
+      <div className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8">
+        <div className="bg-orb-1" aria-hidden />
+        <div className="bg-orb-2" aria-hidden />
+        <main className="relative z-10 mx-auto flex w-full max-w-3xl flex-col gap-6">
+          <section className="panel p-8 sm:p-10">
+            <p className="text-xs uppercase tracking-[0.16em] text-ink/58">Sin datos para mostrar</p>
+            <h1 className="mt-2 font-heading text-4xl text-ink">No hay comunidad activa</h1>
+            <p className="mt-3 text-sm text-ink/70">{dashboardErrorMessage}</p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => queryClient.invalidateQueries({ queryKey: ['community-dashboard'] })}
+                className="btn-primary"
+              >
+                Reintentar
+              </button>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="rounded-xl border border-black/18 bg-white px-4 py-2 text-sm font-semibold text-ink/75 transition hover:border-black/35"
+              >
+                Cambiar sesión
+              </button>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   const renderCommunityTask = (task: CommunityTask) => (
     <article
@@ -416,20 +880,23 @@ function App() {
   );
 
   return (
-    <div className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8">
+    <div className="relative isolate min-h-screen overflow-hidden px-3 py-4 pb-16 sm:px-8 sm:py-8">
       <div className="bg-orb-1" aria-hidden />
       <div className="bg-orb-2" aria-hidden />
 
-      <main className="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <header id="dashboard-menu" className="panel animate-rise p-4 sm:p-6">
-          <div className="flex items-center justify-between gap-3">
+      <main className="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-4 sm:gap-6">
+        <header
+          id="dashboard-menu"
+          className="panel sticky top-3 z-40 animate-rise p-3 sm:p-6 lg:static"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3 sm:items-center">
             <button
               id="btn-mis-comunidades"
               type="button"
-              className="group inline-flex items-center gap-3 rounded-2xl border border-amber-800/20 bg-gradient-to-br from-amber-50/95 to-orange-100/80 px-4 py-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-800/35 hover:shadow-md"
+              className="group inline-flex w-full items-center gap-3 rounded-2xl border border-amber-800/20 bg-gradient-to-br from-amber-50/95 to-orange-100/80 px-3.5 py-2.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-800/35 hover:shadow-md sm:w-auto sm:px-4 sm:py-3"
             >
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-700/90 text-white">
-                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
+              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-700/90 text-white sm:h-9 sm:w-9">
+                <svg viewBox="0 0 24 24" className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden>
                   <path
                     fill="currentColor"
                     d="M12 3a4 4 0 1 1 0 8a4 4 0 0 1 0-8m-7 3a3 3 0 1 1 0 6a3 3 0 0 1 0-6m14 0a3 3 0 1 1 0 6a3 3 0 0 1 0-6m-7 7c3.22 0 5.95 1.57 7.02 3.75A1 1 0 0 1 18.13 18H5.87a1 1 0 0 1-.9-1.25C6.05 14.57 8.78 13 12 13m-7 .5c.84 0 1.63.14 2.34.4a8.3 8.3 0 0 0-2.13 3.1H2.5a1 1 0 0 1-.9-1.43C2.3 14.32 3.58 13.5 5 13.5m14 0c1.42 0 2.7.82 3.4 2.07A1 1 0 0 1 21.5 17h-2.71a8.3 8.3 0 0 0-2.13-3.1c.71-.26 1.5-.4 2.34-.4"
@@ -437,49 +904,230 @@ function App() {
                 </svg>
               </span>
               <span className="leading-tight">
-                <span className="font-heading text-xl text-amber-950/90">Mis Comunidades</span>
+                <span className="font-heading text-lg text-amber-950/90 sm:text-xl">Mis Comunidades</span>
               </span>
             </button>
-            <button
-              id="btn-perfil"
-              type="button"
-              className="transition hover:scale-105"
-              aria-label="Perfil"
-            >
-              <span
-                className="flex h-16 w-16 items-center justify-center rounded-full text-[22px] font-semibold text-white shadow-sm"
-                style={{ backgroundColor: profileMember?.color ?? '#8b6a52' }}
-                aria-hidden
+            <div ref={profileMenuRef} className="relative ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="rounded-xl border border-black/15 bg-white/75 px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.09em] text-ink/70 transition hover:border-black/30 sm:px-3 sm:text-xs sm:tracking-[0.11em]"
               >
-                {profileMember?.initials ?? 'P'}
-              </span>
-            </button>
+                Salir
+              </button>
+              <button
+                id="btn-perfil"
+                type="button"
+                onClick={() =>
+                  setIsProfileMenuOpen((previous) => {
+                    if (previous) {
+                      setIsIconPickerOpen(false);
+                      setIsCreateCommunityOpen(false);
+                      setIsCreateCommunityConfirmOpen(false);
+                    }
+                    return !previous;
+                  })
+                }
+                className="transition hover:scale-105"
+                aria-label="Perfil"
+                aria-expanded={isProfileMenuOpen}
+                aria-controls="profile-menu"
+              >
+                <span
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-white/55 bg-white/22 text-[22px] font-semibold text-white shadow-sm sm:h-16 sm:w-16"
+                  style={{ backgroundColor: profileMember?.color ?? '#8b6a52' }}
+                  aria-hidden
+                >
+                  {renderProfileIcon(profileMember?.avatarIconKey, 'h-9 w-9 rounded-lg object-cover text-white')}
+                </span>
+              </button>
+
+              {isProfileMenuOpen && (
+                <div
+                  id="profile-menu"
+                  className="absolute right-0 top-[calc(100%+0.55rem)] z-[80] max-h-[85vh] w-[min(96vw,390px)] overflow-y-auto rounded-2xl border border-black/12 bg-[color:var(--card)] p-3 shadow-xl backdrop-blur-sm sm:p-4"
+                >
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/55">Mi Perfil</p>
+
+                  <form id="profile-settings-form" onSubmit={handleProfileSave} className="mt-4 space-y-3">
+                    <section className="rounded-xl bg-white/70 p-3">
+                      <p className="metric-label text-center">Icono del perfil</p>
+                      <button
+                        type="button"
+                        onClick={() => setIsIconPickerOpen((previous) => !previous)}
+                        aria-label="Seleccionar icono del perfil"
+                        className="mt-2 mx-auto flex h-20 w-20 items-center justify-center rounded-2xl border border-white/60 transition hover:scale-[1.02]"
+                        style={{ backgroundColor: profileMember?.color ?? '#8b6a52' }}
+                      >
+                        {renderProfileIcon(profileIconDraft, 'h-12 w-12 rounded object-cover text-white')}
+                      </button>
+
+                      {isIconPickerOpen && (
+                        <div className="mt-2 grid grid-cols-3 gap-2">
+                          {profileIconOptions.map((icon) => {
+                            const isSelected = profileIconDraft === icon.key;
+                            return (
+                              <button
+                                key={icon.key}
+                                type="button"
+                                onClick={() => setProfileIconDraft(icon.key)}
+                                className={`rounded-xl border px-2 py-2 text-center transition ${
+                                  isSelected
+                                    ? 'border-amber-700/55 bg-amber-100/85 shadow-sm'
+                                    : 'border-black/10 bg-white/85 hover:border-black/25'
+                                }`}
+                              >
+                                <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-white/80 text-ink">
+                                  {renderProfileIcon(icon.key, 'h-7 w-7 rounded-md object-cover text-ink')}
+                                </span>
+                                <span className="mt-1 block text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70">
+                                  {icon.label}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="rounded-xl bg-white/70 p-3">
+                      <label className="block space-y-1.5">
+                        <span className="metric-label text-center">UserName</span>
+                        <input
+                          type="text"
+                          value={profileAliasDraft}
+                          onChange={(event) => setProfileAliasDraft(event.target.value)}
+                          maxLength={32}
+                          placeholder="Escribe tu userName"
+                          className="w-full rounded-xl border border-black/12 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
+                        />
+                      </label>
+                    </section>
+
+                  </form>
+
+                  <section className="mt-4 rounded-xl border border-black/10 bg-white/70 p-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreateCommunityOpen((previous) => {
+                          const next = !previous;
+                          if (!next) {
+                            setIsCreateCommunityConfirmOpen(false);
+                          }
+                          return next;
+                        });
+                      }}
+                      className="relative mx-auto inline-flex h-7 items-center justify-center rounded-md px-2 py-0 text-center transition hover:bg-white/45"
+                    >
+                      <span className="block text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/72">
+                        Crear comunidad
+                      </span>
+                      {isCreateCommunityOpen && (
+                        <span className="absolute right-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-ink/65">
+                          Ocultar
+                        </span>
+                      )}
+                    </button>
+
+                    {isCreateCommunityOpen && (
+                      <form onSubmit={handlePrepareCreateCommunity} className="mt-2 space-y-2">
+                        <input
+                          type="text"
+                          value={newCommunityName}
+                          onChange={(event) => {
+                            setNewCommunityName(event.target.value);
+                            setIsCreateCommunityConfirmOpen(false);
+                          }}
+                          maxLength={64}
+                          placeholder="Ej: Departamento Centro"
+                          className="w-full rounded-xl border border-black/12 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
+                        />
+
+                        {!isCreateCommunityConfirmOpen && (
+                          <button
+                            type="submit"
+                            className="btn-primary inline-flex w-full items-center justify-center px-3 py-2 text-xs uppercase tracking-[0.08em]"
+                          >
+                            Continuar
+                          </button>
+                        )}
+
+                        {isCreateCommunityConfirmOpen && (
+                          <div className="rounded-xl border border-amber-700/25 bg-amber-50/90 p-3">
+                            <p className="text-xs text-ink/70">
+                              ¿Confirmas crear la comunidad <strong>{newCommunityName.trim()}</strong>?
+                            </p>
+                            <div className="mt-2 flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setIsCreateCommunityConfirmOpen(false)}
+                                className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70 transition hover:border-black/30"
+                              >
+                                Volver
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleConfirmCreateCommunity}
+                                disabled={isCreatingCommunity}
+                                className="btn-primary px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] disabled:cursor-not-allowed disabled:opacity-70"
+                              >
+                                {isCreatingCommunity ? 'Creando...' : 'Confirmar creación'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </form>
+                    )}
+                  </section>
+
+                  <div className="mt-4 flex items-center justify-center">
+                    <button
+                      type="submit"
+                      form="profile-settings-form"
+                      disabled={isSavingProfile}
+                      className="btn-primary px-3 py-2 text-xs uppercase tracking-[0.08em] disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {isSavingProfile ? 'Guardando...' : 'Guardar perfil'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
-        <section id="comunidad" className="panel animate-rise p-5 [animation-delay:90ms] sm:p-8">
+        <section id="comunidad" className="panel animate-rise p-4 [animation-delay:90ms] sm:p-8">
           <p className="text-xs uppercase tracking-[0.18em] text-ink/60">Comunidad</p>
-          <h1 className="font-heading text-4xl text-ink sm:text-5xl">
+          <h1 className="font-heading text-3xl leading-tight text-ink sm:text-5xl">
             {data?.communityName ?? 'Cargando comunidad...'}
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-ink/70 sm:text-base">
             Vista general de tareas del hogar, integrantes activos y progreso semanal.
           </p>
+          {data?.presenceToday && (
+            <p className="mt-2 text-xs uppercase tracking-[0.11em] text-ink/58">
+              Presentes hoy: {data.presenceToday.presentCount} / {data.presenceToday.activeMembersCount}{' '}
+              ({data.presenceToday.awayCount} ausente/s)
+            </p>
+          )}
         </section>
 
         <section
           id="tareas-comunidad"
-          className="panel animate-rise p-5 [animation-delay:130ms] sm:p-8"
+          className="panel animate-rise p-4 [animation-delay:130ms] sm:p-8"
         >
           <div className="mb-5">
-            <h2 className="font-heading text-3xl text-ink">Tareas de la Comunidad</h2>
+            <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">
+              Tareas de la Comunidad
+            </h2>
             <p className="text-sm text-ink/65">
               Gestiona el listado de tareas creadas y agrega nuevas tareas con puntuación.
             </p>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-            <article className="space-y-3 rounded-2xl border border-black/10 bg-white/80 p-4">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-4">
+            <article className="space-y-3 rounded-2xl border border-black/10 bg-white/80 p-3.5 sm:p-4">
               <div className="flex items-center justify-between gap-3">
                 <button
                   type="button"
@@ -506,7 +1154,13 @@ function App() {
 
                 {communityTasks.length > 0 && (
                   <>
-                    <div className="task-list-stack lg:hidden">{communityTasks.map(renderCommunityTask)}</div>
+                    <div
+                      className={`task-list-stack lg:hidden ${
+                        communityTasks.length > 5 ? 'task-list-scroll-mobile' : ''
+                      }`}
+                    >
+                      {communityTasks.map(renderCommunityTask)}
+                    </div>
 
                     <div
                       className={`hidden lg:block ${communityTasks.length > 4 ? 'task-list-scroll' : ''}`}
@@ -520,7 +1174,7 @@ function App() {
 
             <form
               onSubmit={handleCommunityTaskCreate}
-              className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-4"
+              className="space-y-5 rounded-2xl border border-black/10 bg-white/80 p-4 sm:p-5"
             >
               <button
                 type="button"
@@ -541,11 +1195,7 @@ function App() {
                 </span>
               </button>
 
-              <div className={`${isMobileCreateTaskOpen ? 'space-y-4' : 'hidden'} lg:block`}>
-                <p className="rounded-xl border border-black/10 bg-white/70 px-3 py-2 text-sm text-ink/70">
-                  Define la tarea y su puntaje para que aparezca en "Tarea realizada".
-                </p>
-
+              <div className={`${isMobileCreateTaskOpen ? 'space-y-5 pt-1' : 'hidden'} lg:block`}>
                 <label className="space-y-2">
                   <span className="metric-label">Nombre de la tarea</span>
                   <div className="task-field-shell">
@@ -562,13 +1212,13 @@ function App() {
                   </div>
                 </label>
 
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
+                <div className="mt-2.5 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                     <span className="metric-label">Categoría</span>
                     <button
                       type="button"
                       onClick={() => setIsCreateCategoryOpen((previous) => !previous)}
-                      className="rounded-md border border-black/15 bg-white px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink/70 transition hover:border-black/30"
+                      className="inline-flex h-8 items-center justify-center rounded-full border border-black/12 bg-white/45 px-3 text-[10px] font-medium uppercase tracking-[0.1em] text-ink/58 transition hover:border-black/20 hover:bg-white/70"
                     >
                       Crear categoría
                     </button>
@@ -607,18 +1257,18 @@ function App() {
                   </div>
 
                   {isCreateCategoryOpen && (
-                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-black/10 bg-white/85 p-2.5">
+                    <div className="flex flex-col items-stretch gap-2 rounded-xl border border-black/10 bg-white/85 p-2.5 sm:flex-row sm:items-center">
                       <input
                         type="text"
                         placeholder="Ej: Exteriores"
                         value={newCategoryName}
                         onChange={(event) => setNewCategoryName(event.target.value)}
-                        className="min-w-[170px] flex-1 rounded-lg border border-black/12 bg-white px-2.5 py-1.5 text-sm text-ink outline-none transition focus:border-black/30"
+                        className="min-w-0 w-full flex-1 rounded-lg border border-black/12 bg-white px-2.5 py-1.5 text-sm text-ink outline-none transition focus:border-black/30"
                       />
                       <button
                         type="button"
                         onClick={handleCategoryCreate}
-                        className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-ink/75 transition hover:border-black/30"
+                        className="w-full rounded-lg border border-black/15 bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-ink/75 transition hover:border-black/30 sm:w-auto"
                       >
                         Crear
                       </button>
@@ -626,14 +1276,9 @@ function App() {
                   )}
                 </div>
 
-                <label className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
+                <label className="mt-2 space-y-2">
+                  <div className="flex items-center gap-3">
                     <span className="metric-label">Puntuación (2 a 7)</span>
-                    <span
-                      className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${createTaskScoreBadgeClass}`}
-                    >
-                      {communityTaskScore} pts
-                    </span>
                   </div>
                   <div className="task-field-shell">
                     <span className="task-field-icon" aria-hidden>
@@ -665,27 +1310,11 @@ function App() {
                   </div>
                 </label>
 
-                <article className="rounded-xl border border-black/10 bg-white/85 p-3">
-                  <p className="metric-label">Vista previa</p>
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-ink/85">
-                        {communityTaskName.trim() || 'Nombre pendiente'}
-                      </p>
-                      <p className="mt-0.5 text-[11px] uppercase tracking-[0.12em] text-ink/55">
-                        {communityTaskCategory || 'Categoría pendiente'}
-                      </p>
-                    </div>
-                    <span
-                      className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${createTaskScoreBadgeClass}`}
-                    >
-                      {communityTaskScore} pts
-                    </span>
-                  </div>
-                </article>
-
-                <div className="flex justify-center">
-                  <button type="submit" className="btn-primary inline-flex items-center justify-center">
+                <div className="mt-5 flex justify-center pt-1">
+                  <button
+                    type="submit"
+                    className="btn-primary inline-flex w-full items-center justify-center sm:w-auto"
+                  >
                     Guardar tarea
                   </button>
                 </div>
@@ -694,9 +1323,9 @@ function App() {
           </div>
         </section>
 
-        <section id="integrantes" className="panel animate-rise p-5 [animation-delay:180ms] sm:p-8">
-          <div className="mb-5 flex items-center justify-between gap-3">
-            <h2 className="font-heading text-3xl text-ink">Integrantes</h2>
+        <section id="integrantes" className="panel animate-rise p-4 [animation-delay:180ms] sm:p-8">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">Integrantes</h2>
             <span className="rounded-full bg-stone-800/85 px-3 py-1 text-xs uppercase tracking-[0.15em] text-white">
               {data?.members.length ?? 0} miembros
             </span>
@@ -728,7 +1357,7 @@ function App() {
                       {member.initials.slice(0, 1)}
                     </span>
                     <div className="min-w-0">
-                      <h3 className="truncate font-heading text-2xl leading-none text-ink sm:text-[2rem]">
+                      <h3 className="truncate font-heading text-xl leading-none text-ink sm:text-[2rem]">
                         {member.name}
                       </h3>
                       <p className="mt-1 text-sm text-ink/68 sm:text-base">
@@ -748,16 +1377,18 @@ function App() {
           )}
         </section>
 
-        <section id="registro-diario" className="panel animate-rise p-5 [animation-delay:225ms] sm:p-8">
+        <section id="registro-diario" className="panel animate-rise p-4 [animation-delay:225ms] sm:p-8">
           <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h2 className="font-heading text-3xl text-ink">Registro del día</h2>
+              <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">
+                Registro del día
+              </h2>
               <p className="text-sm text-ink/65">
                 Completa tareas del integrante activo. Por defecto se guarda para hoy, pero puedes
                 registrar otro día.
               </p>
             </div>
-            <span className="rounded-full border border-black/15 bg-white/75 px-3 py-1 text-xs uppercase tracking-[0.15em] text-ink/70">
+            <span className="w-full rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-xs uppercase tracking-[0.15em] text-ink/70 sm:w-auto">
               Día seleccionado: {selectedDayLabel}
             </span>
           </div>
@@ -773,7 +1404,7 @@ function App() {
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
               <form
                 onSubmit={handleTaskSubmit}
-                className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-4"
+                className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-3.5 sm:p-4"
               >
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="flex items-center justify-center">
@@ -809,6 +1440,40 @@ function App() {
                   </label>
                 </div>
 
+                <label className="space-y-2 sm:max-w-[260px]">
+                  <span className="metric-label">Filtrar por categoría</span>
+                  <div className="task-field-shell">
+                    <span className="task-field-icon" aria-hidden>
+                      ⌁
+                    </span>
+                    <select
+                      value={taskFilterCategory}
+                      onChange={(event) => setTaskFilterCategory(event.target.value)}
+                      disabled={taskFilterCategories.length === 0}
+                      className="task-field-select"
+                    >
+                      <option value="">Todas</option>
+                      {taskFilterCategories.map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="task-field-caret" aria-hidden>
+                      <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
+                        <path
+                          fill="currentColor"
+                          d="m5.5 7.5 4.5 5 4.5-5"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
+                  </div>
+                </label>
+
                 <label className="space-y-2">
                   <span className="metric-label">Tarea realizada</span>
                   <div className="task-field-shell task-field-shell-select">
@@ -819,13 +1484,16 @@ function App() {
                       <select
                         value={taskDescription}
                         onChange={(event) => setTaskDescription(event.target.value)}
-                        disabled={communityTasks.length === 0}
+                        disabled={filteredCommunityTasks.length === 0}
                         className="task-field-select task-field-select-task"
                       >
                         {communityTasks.length === 0 && <option value="">No hay tareas creadas</option>}
-                        {communityTasks.map((task) => (
+                        {communityTasks.length > 0 && filteredCommunityTasks.length === 0 && (
+                          <option value="">No hay tareas para esta categoría</option>
+                        )}
+                        {filteredCommunityTasks.map((task) => (
                           <option key={task.id} value={task.name}>
-                            {task.name} · {task.category}
+                            {task.name}
                           </option>
                         ))}
                       </select>
@@ -852,30 +1520,11 @@ function App() {
                   </div>
                 </label>
 
-                <label className="space-y-2 sm:max-w-[220px]">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="metric-label">Cantidad</span>
-                    <span className="rounded-md border border-black/10 bg-white/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/60">
-                      Máx 20
-                    </span>
-                  </div>
-                  <div className="task-field-shell">
-                    <span className="task-field-icon" aria-hidden>
-                      #
-                    </span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={taskCount}
-                      onChange={(event) => setTaskCount(Number(event.target.value) || 1)}
-                      className="task-field-number"
-                    />
-                  </div>
-                </label>
-
                 <div className="flex justify-center">
-                  <button type="submit" className="btn-primary inline-flex items-center justify-center">
+                  <button
+                    type="submit"
+                    className="btn-primary inline-flex w-full items-center justify-center sm:w-auto"
+                  >
                     Registrar tarea
                   </button>
                 </div>
@@ -887,7 +1536,7 @@ function App() {
                 )}
               </form>
 
-              <aside className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-4">
+              <aside className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-3.5 sm:p-4">
                 <article className="rounded-xl border border-black/10 bg-white/85 p-3">
                   <p className="metric-label">Estado de hoy</p>
                   <div className="mt-2 flex items-center justify-between gap-3">
@@ -906,32 +1555,77 @@ function App() {
                 </article>
 
                 <div>
-                  <p className="metric-label">Últimos registros manuales</p>
-                  <div className="mt-2 space-y-2">
-                    {taskEntries.length === 0 && (
-                      <p className="rounded-xl border border-dashed border-black/20 bg-white/70 px-3 py-2 text-sm text-ink/60">
-                        Aún no hay registros manuales.
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="metric-label">Mis últimos registros</p>
+                      <p className="mt-1 text-xs text-ink/62">
+                        Tus tareas más recientes, ordenadas como una libreta de seguimiento.
                       </p>
+                    </div>
+                    <span className="rounded-full border border-black/10 bg-white/75 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink/62">
+                      {myRecentTaskLogs.length}/5
+                    </span>
+                  </div>
+
+                  <div className="recent-log-stack mt-3">
+                    {myRecentTaskLogs.length === 0 && (
+                      <div className="recent-log-empty">
+                        <span className="recent-log-empty-icon" aria-hidden>
+                          <svg viewBox="0 0 24 24" className="h-4 w-4">
+                            <path
+                              fill="currentColor"
+                              d="M7 3.75A1.75 1.75 0 0 0 5.25 5.5v13A1.75 1.75 0 0 0 7 20.25h10A1.75 1.75 0 0 0 18.75 18.5v-13A1.75 1.75 0 0 0 17 3.75H7Zm1.5 3a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1-.75-.75Zm0 4a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1-.75-.75Zm.75 3.25a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 0-1.5h-3.5Z"
+                            />
+                          </svg>
+                        </span>
+                        <div>
+                          <p className="text-sm font-semibold text-ink/78">Aún no registras actividades.</p>
+                          <p className="mt-1 text-xs text-ink/58">
+                            Tu libreta empezará a llenarse cuando guardes la primera tarea.
+                          </p>
+                        </div>
+                      </div>
                     )}
 
-                    {taskEntries.slice(0, 5).map((entry) => (
+                    {myRecentTaskLogs.map((entry) => (
                       <article
                         key={entry.id}
-                        className="rounded-xl border border-black/10 bg-white/85 px-3 py-2"
+                        className="recent-log-card"
+                        style={getRecentLogStyle(entry.categoryName)}
                       >
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <span
-                            className="inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-white"
-                            style={{ backgroundColor: memberColorMap[entry.member] ?? '#8b6a52' }}
-                          >
-                            {entry.member}
-                          </span>
-                          <span className="text-[11px] text-ink/60">
-                            {entry.day}, {formatDateLabel(entry.date)}
-                          </span>
+                        <span className="recent-log-rail" aria-hidden />
+                        <div className="recent-log-shell">
+                          <div className="recent-log-top">
+                            <div className="recent-log-tags">
+                              <span
+                                className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${getScoreBadgeClass(entry.scoreSnapshot)}`}
+                              >
+                                {entry.pointsTotal} pts
+                              </span>
+                              <span className="recent-log-tag">{entry.categoryName}</span>
+                              <span className="recent-log-stamp">
+                                {getRecentLogMomentLabel(entry.performedOn)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteTaskEntry(entry)}
+                              disabled={isDeletingTaskEntryId === entry.id}
+                              className="recent-log-delete"
+                              aria-label={`Eliminar registro ${entry.taskName}`}
+                            >
+                              {isDeletingTaskEntryId === entry.id ? '...' : '×'}
+                            </button>
+                          </div>
+
+                          <div className="recent-log-body">
+                            <p className="recent-log-title">{entry.taskName}</p>
+                            <p className="recent-log-meta">
+                              Hecha el {toDayLabel(entry.performedOn)}, {formatDateLabel(entry.performedOn)}
+                            </p>
+                          </div>
+
                         </div>
-                        <p className="text-sm text-ink/80">{entry.task}</p>
-                        <p className="text-xs text-ink/65">{entry.count} tarea(s) sumadas</p>
                       </article>
                     ))}
                   </div>
@@ -949,23 +1643,25 @@ function App() {
 
         <section
           id="actividades-semanales"
-          className="panel animate-rise p-5 [animation-delay:300ms] sm:p-8"
+          className="panel animate-rise p-4 [animation-delay:300ms] sm:p-8"
         >
           <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h2 className="font-heading text-3xl text-ink">Actividades semanales</h2>
+              <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">
+                Actividades semanales
+              </h2>
               <p className="text-sm text-ink/65">
                 Seguimiento de carga por integrante y ritmo de la semana.
               </p>
             </div>
-            <span className="rounded-full border border-black/15 bg-white/75 px-3 py-1 text-xs uppercase tracking-[0.15em] text-ink/70">
+            <span className="w-full rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-xs uppercase tracking-[0.15em] text-ink/70 sm:w-auto">
               Semana actual
             </span>
           </div>
 
           {isLoading && (
             <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 {Array.from({ length: 4 }).map((_, index) => (
                   <div
                     key={index}
@@ -973,13 +1669,13 @@ function App() {
                   />
                 ))}
               </div>
-              <div className="h-[360px] animate-pulse rounded-2xl border border-black/10 bg-white/60" />
+              <div className="h-[280px] animate-pulse rounded-2xl border border-black/10 bg-white/60 sm:h-[360px]" />
             </div>
           )}
 
           {!isLoading && !isError && data && (
             <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <article className="dashboard-card">
                   <p className="metric-label">Tareas esta semana</p>
                   <p className="metric-value">{weeklyTotal}</p>
@@ -1015,7 +1711,7 @@ function App() {
                       Día con mayor actividad: <strong>{busiestDay.day}</strong> ({busiestDay.total})
                     </p>
                   </div>
-                  <div className="h-[360px]">
+                  <div className="h-[280px] sm:h-[360px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={dailyOverview} barGap={6}>
                         <CartesianGrid
@@ -1049,7 +1745,7 @@ function App() {
                           <Bar
                             key={member.name}
                             dataKey={member.name}
-                            name={memberNameByDataKey[member.name]}
+                            name={member.name}
                             fill={member.color}
                             radius={[7, 7, 0, 0]}
                             maxBarSize={28}
@@ -1145,7 +1841,7 @@ function App() {
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[620px] border-separate border-spacing-y-2 text-sm">
+                  <table className="w-full min-w-[540px] border-separate border-spacing-y-2 text-sm">
                     <thead>
                       <tr>
                         <th className="table-head text-left">Día</th>
@@ -1162,7 +1858,7 @@ function App() {
                         <tr key={day.day} className="rounded-xl">
                           <td className="table-cell font-semibold text-ink/80">{day.day}</td>
                           {data.members.map((member) => {
-                            const tasks = day[member.name];
+                            const tasks = Number(day[member.name] ?? 0);
                             const alpha = tasks > 0 ? Math.min(0.2 + tasks * 0.13, 0.82) : 0.08;
                             return (
                               <td key={member.name} className="table-cell">
@@ -1200,7 +1896,7 @@ function App() {
       </main>
 
       {toasts.length > 0 && (
-        <div className="pointer-events-none fixed right-4 top-4 z-[60] flex w-[min(92vw,360px)] flex-col gap-2">
+        <div className="pointer-events-none fixed left-3 right-3 top-3 z-[60] flex flex-col gap-2 sm:left-auto sm:right-4 sm:top-4 sm:w-[min(92vw,360px)]">
           {toasts.map((toast) => (
             <div
               key={toast.id}
@@ -1240,18 +1936,18 @@ function App() {
               Se eliminará <strong>{taskToDelete.name}</strong> ({taskToDelete.category},{' '}
               {taskToDelete.score} pts). Esta acción no se puede deshacer.
             </p>
-            <div className="mt-5 flex items-center justify-end gap-2">
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
               <button
                 type="button"
                 onClick={() => setTaskToDelete(null)}
-                className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm font-medium text-ink/80 transition hover:border-black/30"
+                className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm font-medium text-ink/80 transition hover:border-black/30 sm:w-auto"
               >
                 Cancelar
               </button>
               <button
                 type="button"
                 onClick={handleConfirmDeleteTask}
-                className="rounded-lg border border-red-300 bg-red-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+                className="w-full rounded-lg border border-red-300 bg-red-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-700 sm:w-auto"
               >
                 Sí, eliminar
               </button>
@@ -1288,6 +1984,69 @@ function formatDateLabel(dateValue: string): string {
     day: '2-digit',
     month: 'short',
   }).format(parsed);
+}
+
+function getRecentLogMomentLabel(dateValue: string): string {
+  const todayIsoDate = getTodayIsoDate();
+  if (dateValue === todayIsoDate) {
+    return 'Hoy';
+  }
+
+  const today = new Date(`${todayIsoDate}T12:00:00`);
+  const performed = new Date(`${dateValue}T12:00:00`);
+  if (Number.isNaN(today.getTime()) || Number.isNaN(performed.getTime())) {
+    return toDayLabel(dateValue);
+  }
+
+  const diffInDays = Math.round((today.getTime() - performed.getTime()) / 86400000);
+  if (diffInDays === 1) {
+    return 'Ayer';
+  }
+
+  return toDayLabel(dateValue);
+}
+
+function getRecentLogStyle(categoryName: string): CSSProperties {
+  const palettes: RecentLogTone[] = [
+    {
+      accent: 'oklch(0.658 0.118 47)',
+      border: 'rgba(177, 103, 70, 0.2)',
+      chip: 'rgba(255, 247, 240, 0.92)',
+      soft: 'rgba(250, 236, 226, 0.9)',
+    },
+    {
+      accent: 'oklch(0.675 0.074 149)',
+      border: 'rgba(112, 142, 94, 0.22)',
+      chip: 'rgba(245, 251, 243, 0.92)',
+      soft: 'rgba(228, 241, 223, 0.9)',
+    },
+    {
+      accent: 'oklch(0.735 0.088 84)',
+      border: 'rgba(176, 146, 78, 0.22)',
+      chip: 'rgba(255, 250, 235, 0.92)',
+      soft: 'rgba(247, 239, 211, 0.9)',
+    },
+    {
+      accent: 'oklch(0.604 0.112 28)',
+      border: 'rgba(170, 92, 82, 0.22)',
+      chip: 'rgba(255, 244, 242, 0.92)',
+      soft: 'rgba(247, 226, 223, 0.9)',
+    },
+  ];
+
+  const normalized = categoryName
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const hash = Array.from(normalized).reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const tone = palettes[hash % palettes.length];
+
+  return {
+    '--recent-log-accent': tone.accent,
+    '--recent-log-border': tone.border,
+    '--recent-log-chip': tone.chip,
+    '--recent-log-soft': tone.soft,
+  } as CSSProperties;
 }
 
 function getTodayIsoDate(): string {
