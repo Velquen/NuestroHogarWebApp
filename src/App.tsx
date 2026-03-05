@@ -29,15 +29,43 @@ interface LoggedTask {
 interface CommunityTask {
   id: string;
   name: string;
+  category: string;
   score: number;
   createdAt: string;
 }
 
+type ToastVariant = 'success' | 'error';
+
+interface AppToast {
+  id: string;
+  message: string;
+  variant: ToastVariant;
+}
+
 const initialCommunityTasks: CommunityTask[] = [
-  { id: 'task-base-1', name: 'Lavar platos', score: 4, createdAt: getTodayIsoDate() },
-  { id: 'task-base-2', name: 'Sacar basura', score: 3, createdAt: getTodayIsoDate() },
-  { id: 'task-base-3', name: 'Limpiar baño', score: 6, createdAt: getTodayIsoDate() },
+  {
+    id: 'task-base-1',
+    name: 'Lavar platos',
+    category: 'Cocina',
+    score: 4,
+    createdAt: getTodayIsoDate(),
+  },
+  {
+    id: 'task-base-2',
+    name: 'Sacar basura',
+    category: 'Limpieza',
+    score: 3,
+    createdAt: getTodayIsoDate(),
+  },
+  {
+    id: 'task-base-3',
+    name: 'Limpiar baño',
+    category: 'Baño',
+    score: 6,
+    createdAt: getTodayIsoDate(),
+  },
 ];
+const initialTaskCategories = Array.from(new Set(initialCommunityTasks.map((task) => task.category)));
 
 const weekdayMap: Record<string, string> = {
   lunes: 'Lunes',
@@ -49,13 +77,19 @@ const weekdayMap: Record<string, string> = {
   domingo: 'Domingo',
 };
 
+const getScoreBadgeClass = (score: number) =>
+  score <= 3
+    ? 'border-amber-200 bg-amber-100 text-amber-800'
+    : score <= 5
+      ? 'border-orange-200 bg-orange-100 text-orange-800'
+      : 'border-lime-200 bg-lime-100 text-lime-800';
+
 function App() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['community-dashboard'],
     queryFn: fetchCommunityDashboard,
   });
 
-  const [activeMember, setActiveMember] = useState<MemberName>('Gaspar');
   const [taskDate, setTaskDate] = useState(() => getTodayIsoDate());
   const [taskDescription, setTaskDescription] = useState('');
   const [taskCount, setTaskCount] = useState(1);
@@ -63,8 +97,15 @@ function App() {
   const [taskEntries, setTaskEntries] = useState<LoggedTask[]>([]);
   const [communityTasks, setCommunityTasks] = useState<CommunityTask[]>(initialCommunityTasks);
   const [communityTaskName, setCommunityTaskName] = useState('');
+  const [taskCategories, setTaskCategories] = useState<string[]>(initialTaskCategories);
+  const [communityTaskCategory, setCommunityTaskCategory] = useState(initialTaskCategories[0] ?? '');
+  const [isCreateCategoryOpen, setIsCreateCategoryOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
   const [communityTaskScore, setCommunityTaskScore] = useState(4);
-  const [communityTaskMessage, setCommunityTaskMessage] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<AppToast[]>([]);
+  const [isMobileTasksOpen, setIsMobileTasksOpen] = useState(false);
+  const [isMobileCreateTaskOpen, setIsMobileCreateTaskOpen] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<CommunityTask | null>(null);
 
   const selectedDayLabel = useMemo(() => toDayLabel(taskDate), [taskDate]);
   const todayLabel = useMemo(() => toDayLabel(getTodayIsoDate()), []);
@@ -168,6 +209,10 @@ function App() {
     return dailyOverview.reduce((best, day) => (day.total > best.total ? day : best));
   }, [dailyOverview]);
 
+  const profileMember = data?.members[0];
+  const activeMember: MemberName = profileMember?.name ?? 'Gaspar';
+  const activeMemberProfile = profileMember;
+
   const todayForActiveMember = useMemo(() => {
     if (!dailyOverview.length) {
       return 0;
@@ -177,9 +222,15 @@ function App() {
     return dayRecord ? dayRecord[activeMember] : 0;
   }, [dailyOverview, activeMember, todayLabel]);
 
-  const profileMember = data?.members[0];
-  const activeMemberProfile = data?.members.find((member) => member.name === activeMember);
   const isTodaySelected = taskDate === todayIsoDate;
+  const selectedCommunityTask = useMemo(
+    () => communityTasks.find((task) => task.name === taskDescription) ?? null,
+    [communityTasks, taskDescription],
+  );
+  const selectedTaskBadgeClass = selectedCommunityTask
+    ? getScoreBadgeClass(selectedCommunityTask.score)
+    : 'border-black/12 bg-white/70 text-ink/60';
+  const createTaskScoreBadgeClass = getScoreBadgeClass(communityTaskScore);
 
   const donutData = useMemo(() => {
     const withTasks = totalsByMember.filter((member) => member.completed > 0);
@@ -211,6 +262,27 @@ function App() {
     }
   }, [communityTasks, taskDescription]);
 
+  useEffect(() => {
+    if (!communityTaskCategory && taskCategories.length > 0) {
+      setCommunityTaskCategory(taskCategories[0]);
+      return;
+    }
+
+    if (communityTaskCategory && !taskCategories.includes(communityTaskCategory)) {
+      setCommunityTaskCategory(taskCategories[0] ?? '');
+    }
+  }, [taskCategories, communityTaskCategory]);
+
+  const showToast = (message: string, variant: ToastVariant = 'success') => {
+    const id = `toast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    setToasts((previous) => [...previous, { id, message, variant }]);
+
+    window.setTimeout(() => {
+      setToasts((previous) => previous.filter((toast) => toast.id !== id));
+    }, 3000);
+  };
+
   const handleTaskSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -239,15 +311,20 @@ function App() {
       setTaskDescription('');
     }
     setTaskCount(1);
-    setFormMessage(`Registrado: ${safeCount} tarea(s) para ${activeMember} en ${dayLabel}.`);
+    setFormMessage(`Registrado: ${safeCount} tarea(s) para el integrante activo en ${dayLabel}.`);
   };
 
   const handleCommunityTaskCreate = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     const name = communityTaskName.trim();
+    const category = communityTaskCategory.trim();
     if (!name) {
-      setCommunityTaskMessage('Escribe el nombre de la tarea.');
+      showToast('Escribe el nombre de la tarea.', 'error');
+      return;
+    }
+    if (!category) {
+      showToast('Selecciona una categoría para la tarea.', 'error');
       return;
     }
 
@@ -255,6 +332,7 @@ function App() {
     const newTask: CommunityTask = {
       id: `task-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       name,
+      category,
       score: safeScore,
       createdAt: getTodayIsoDate(),
     };
@@ -262,8 +340,80 @@ function App() {
     setCommunityTasks((prev) => [newTask, ...prev]);
     setCommunityTaskName('');
     setCommunityTaskScore(4);
-    setCommunityTaskMessage(`Tarea creada: "${name}" con puntuación ${safeScore}.`);
+    showToast(`Tarea creada: "${name}" (${category}) con puntuación ${safeScore}.`);
   };
+
+  const handleCategoryCreate = () => {
+    const categoryName = newCategoryName.trim();
+    if (!categoryName) {
+      showToast('Escribe un nombre para la categoría.', 'error');
+      return;
+    }
+
+    const alreadyExists = taskCategories.some(
+      (existingCategory) => existingCategory.toLowerCase() === categoryName.toLowerCase(),
+    );
+
+    if (alreadyExists) {
+      showToast(`La categoría "${categoryName}" ya existe.`, 'error');
+      return;
+    }
+
+    setTaskCategories((previous) => [categoryName, ...previous]);
+    setCommunityTaskCategory(categoryName);
+    setNewCategoryName('');
+    setIsCreateCategoryOpen(false);
+    showToast(`Categoría creada: "${categoryName}".`);
+  };
+
+  const handleConfirmDeleteTask = () => {
+    if (!taskToDelete) {
+      return;
+    }
+
+    setCommunityTasks((previous) => {
+      const next = previous.filter((task) => task.id !== taskToDelete.id);
+      const selectedTaskStillExists = next.some((task) => task.name === taskDescription);
+
+      if (!selectedTaskStillExists) {
+        setTaskDescription(next[0]?.name ?? '');
+      }
+
+      return next;
+    });
+
+    showToast(`Tarea eliminada: "${taskToDelete.name}".`);
+    setTaskToDelete(null);
+  };
+
+  const renderCommunityTask = (task: CommunityTask) => (
+    <article
+      key={task.id}
+      className="task-list-item flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-white/85 px-3 py-2"
+    >
+      <div className="min-w-0">
+        <p className="truncate text-sm font-semibold text-ink/85">{task.name}</p>
+        <p className="mt-0.5 text-[11px] uppercase tracking-[0.12em] text-ink/55">{task.category}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <span
+          className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+            getScoreBadgeClass(task.score)
+          }`}
+        >
+          {task.score} pts
+        </span>
+        <button
+          type="button"
+          onClick={() => setTaskToDelete(task)}
+          className="inline-flex h-[21px] w-[21px] items-center justify-center rounded-full border border-red-300 bg-red-50 text-sm font-semibold leading-none text-red-700 transition hover:border-red-400 hover:bg-red-100"
+          aria-label={`Eliminar tarea ${task.name}`}
+        >
+          ×
+        </button>
+      </div>
+    </article>
+  );
 
   return (
     <div className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8">
@@ -272,17 +422,13 @@ function App() {
 
       <main className="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-6">
         <header id="dashboard-menu" className="panel animate-rise p-4 sm:p-6">
-          <div className="mb-4 flex items-center justify-between gap-4 border-b border-black/10 pb-4">
-            <p className="font-heading text-lg tracking-[0.2em] text-ink/70">MENU</p>
-          </div>
-
           <div className="flex items-center justify-between gap-3">
             <button
               id="btn-mis-comunidades"
               type="button"
-              className="group inline-flex items-center gap-3 rounded-2xl border border-cyan-700/20 bg-gradient-to-br from-cyan-50/90 to-teal-50/80 px-4 py-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-700/35 hover:shadow-md"
+              className="group inline-flex items-center gap-3 rounded-2xl border border-amber-800/20 bg-gradient-to-br from-amber-50/95 to-orange-100/80 px-4 py-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-800/35 hover:shadow-md"
             >
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-600/85 text-white">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-700/90 text-white">
                 <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
                   <path
                     fill="currentColor"
@@ -291,10 +437,7 @@ function App() {
                 </svg>
               </span>
               <span className="leading-tight">
-                <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-900/65">
-                  Navegacion
-                </span>
-                <span className="font-heading text-xl text-cyan-900/90">Mis Comunidades</span>
+                <span className="font-heading text-xl text-amber-950/90">Mis Comunidades</span>
               </span>
             </button>
             <button
@@ -305,7 +448,7 @@ function App() {
             >
               <span
                 className="flex h-16 w-16 items-center justify-center rounded-full text-[22px] font-semibold text-white shadow-sm"
-                style={{ backgroundColor: profileMember?.color ?? '#64748b' }}
+                style={{ backgroundColor: profileMember?.color ?? '#8b6a52' }}
                 aria-hidden
               >
                 {profileMember?.initials ?? 'P'}
@@ -322,47 +465,56 @@ function App() {
           <p className="mt-2 max-w-2xl text-sm text-ink/70 sm:text-base">
             Vista general de tareas del hogar, integrantes activos y progreso semanal.
           </p>
+        </section>
 
-          <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <section
+          id="tareas-comunidad"
+          className="panel animate-rise p-5 [animation-delay:130ms] sm:p-8"
+        >
+          <div className="mb-5">
+            <h2 className="font-heading text-3xl text-ink">Tareas de la Comunidad</h2>
+            <p className="text-sm text-ink/65">
+              Gestiona el listado de tareas creadas y agrega nuevas tareas con puntuación.
+            </p>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <article className="space-y-3 rounded-2xl border border-black/10 bg-white/80 p-4">
               <div className="flex items-center justify-between gap-3">
-                <h3 className="font-heading text-2xl text-ink">Tareas</h3>
-                <span className="rounded-full bg-black/80 px-3 py-1 text-xs uppercase tracking-[0.13em] text-white">
+                <button
+                  type="button"
+                  onClick={() => setIsMobileTasksOpen((previous) => !previous)}
+                  className="flex items-center gap-2 text-left lg:cursor-default"
+                  aria-expanded={isMobileTasksOpen}
+                >
+                  <h3 className="font-heading text-2xl text-ink">Tareas</h3>
+                  <span className="rounded-full border border-black/15 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70 lg:hidden">
+                    {isMobileTasksOpen ? 'Ocultar' : 'Ver'}
+                  </span>
+                </button>
+                <span className="rounded-full bg-stone-800/85 px-3 py-1 text-xs uppercase tracking-[0.13em] text-white">
                   {communityTasks.length} creadas
                 </span>
               </div>
 
-              {communityTasks.length === 0 && (
-                <p className="rounded-xl border border-dashed border-black/20 bg-white/70 px-3 py-2 text-sm text-ink/65">
-                  Aún no hay tareas creadas.
-                </p>
-              )}
+              <div className={`${isMobileTasksOpen ? 'block' : 'hidden'} lg:block`}>
+                {communityTasks.length === 0 && (
+                  <p className="rounded-xl border border-dashed border-black/20 bg-white/70 px-3 py-2 text-sm text-ink/65">
+                    Aún no hay tareas creadas.
+                  </p>
+                )}
 
-              <div className="space-y-2">
-                {communityTasks.map((task) => (
-                  <article
-                    key={task.id}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-white/85 px-3 py-2"
-                  >
-                    <div>
-                      <p className="text-sm font-semibold text-ink/85">{task.name}</p>
-                      <p className="text-[11px] uppercase tracking-[0.1em] text-ink/55">
-                        creada {formatDateLabel(task.createdAt)}
-                      </p>
-                    </div>
-                    <span
-                      className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                        task.score <= 3
-                          ? 'border-amber-200 bg-amber-100 text-amber-800'
-                          : task.score <= 5
-                            ? 'border-cyan-200 bg-cyan-100 text-cyan-800'
-                            : 'border-emerald-200 bg-emerald-100 text-emerald-800'
-                      }`}
+                {communityTasks.length > 0 && (
+                  <>
+                    <div className="task-list-stack lg:hidden">{communityTasks.map(renderCommunityTask)}</div>
+
+                    <div
+                      className={`hidden lg:block ${communityTasks.length > 4 ? 'task-list-scroll' : ''}`}
                     >
-                      {task.score} pts
-                    </span>
-                  </article>
-                ))}
+                      <div className="task-list-stack">{communityTasks.map(renderCommunityTask)}</div>
+                    </div>
+                  </>
+                )}
               </div>
             </article>
 
@@ -370,46 +522,174 @@ function App() {
               onSubmit={handleCommunityTaskCreate}
               className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-4"
             >
-              <h3 className="font-heading text-2xl text-ink">Crear tarea</h3>
-
-              <label className="space-y-1.5">
-                <span className="metric-label">Nombre de la tarea</span>
-                <input
-                  type="text"
-                  placeholder="Ej: Barrer patio"
-                  value={communityTaskName}
-                  onChange={(event) => setCommunityTaskName(event.target.value)}
-                  className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-ink outline-none transition placeholder:text-ink/40 focus:border-black/30"
-                />
-              </label>
-
-              <label className="space-y-1.5">
-                <span className="metric-label">Puntuación (2 a 7)</span>
-                <select
-                  value={communityTaskScore}
-                  onChange={(event) => setCommunityTaskScore(Number(event.target.value))}
-                  className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
-                >
-                  {[2, 3, 4, 5, 6, 7].map((score) => (
-                    <option key={score} value={score}>
-                      {score}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
               <button
-                type="submit"
-                className="inline-flex items-center justify-center rounded-xl border border-black/15 bg-black px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+                type="button"
+                onClick={() => setIsMobileCreateTaskOpen((previous) => !previous)}
+                className="flex w-full items-center justify-between gap-2 text-left lg:cursor-default"
+                aria-expanded={isMobileCreateTaskOpen}
               >
-                Guardar tarea
+                <div className="flex items-center gap-2">
+                  <h3 className="font-heading text-2xl text-ink">Crear tarea</h3>
+                  <span className="rounded-full border border-black/15 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70 lg:hidden">
+                    {isMobileCreateTaskOpen ? 'Ocultar' : 'Abrir'}
+                  </span>
+                </div>
+                <span
+                  className={`hidden rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] sm:inline-flex ${createTaskScoreBadgeClass}`}
+                >
+                  {communityTaskScore} pts
+                </span>
               </button>
 
-              {communityTaskMessage && (
-                <p className="rounded-xl border border-black/10 bg-white/70 px-3 py-2 text-sm text-ink/75">
-                  {communityTaskMessage}
+              <div className={`${isMobileCreateTaskOpen ? 'space-y-4' : 'hidden'} lg:block`}>
+                <p className="rounded-xl border border-black/10 bg-white/70 px-3 py-2 text-sm text-ink/70">
+                  Define la tarea y su puntaje para que aparezca en "Tarea realizada".
                 </p>
-              )}
+
+                <label className="space-y-2">
+                  <span className="metric-label">Nombre de la tarea</span>
+                  <div className="task-field-shell">
+                    <span className="task-field-icon" aria-hidden>
+                      ✎
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Ej: Barrer patio"
+                      value={communityTaskName}
+                      onChange={(event) => setCommunityTaskName(event.target.value)}
+                      className="min-w-0 flex-1 border-0 bg-transparent py-1 text-sm font-semibold text-ink outline-none ring-0 placeholder:text-ink/40"
+                    />
+                  </div>
+                </label>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="metric-label">Categoría</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreateCategoryOpen((previous) => !previous)}
+                      className="rounded-md border border-black/15 bg-white px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink/70 transition hover:border-black/30"
+                    >
+                      Crear categoría
+                    </button>
+                  </div>
+
+                  <div className="task-field-shell">
+                    <span className="task-field-icon" aria-hidden>
+                      ⌁
+                    </span>
+                    <select
+                      value={communityTaskCategory}
+                      onChange={(event) => setCommunityTaskCategory(event.target.value)}
+                      className="task-field-select"
+                    >
+                      {taskCategories.length === 0 && (
+                        <option value="">Crea una categoría</option>
+                      )}
+                      {taskCategories.map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="task-field-caret" aria-hidden>
+                      <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
+                        <path
+                          fill="currentColor"
+                          d="m5.5 7.5 4.5 5 4.5-5"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
+                  </div>
+
+                  {isCreateCategoryOpen && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-black/10 bg-white/85 p-2.5">
+                      <input
+                        type="text"
+                        placeholder="Ej: Exteriores"
+                        value={newCategoryName}
+                        onChange={(event) => setNewCategoryName(event.target.value)}
+                        className="min-w-[170px] flex-1 rounded-lg border border-black/12 bg-white px-2.5 py-1.5 text-sm text-ink outline-none transition focus:border-black/30"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCategoryCreate}
+                        className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-ink/75 transition hover:border-black/30"
+                      >
+                        Crear
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <label className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="metric-label">Puntuación (2 a 7)</span>
+                    <span
+                      className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${createTaskScoreBadgeClass}`}
+                    >
+                      {communityTaskScore} pts
+                    </span>
+                  </div>
+                  <div className="task-field-shell">
+                    <span className="task-field-icon" aria-hidden>
+                      ★
+                    </span>
+                    <select
+                      value={communityTaskScore}
+                      onChange={(event) => setCommunityTaskScore(Number(event.target.value))}
+                      className="task-field-select"
+                    >
+                      {[2, 3, 4, 5, 6, 7].map((score) => (
+                        <option key={score} value={score}>
+                          {score}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="task-field-caret" aria-hidden>
+                      <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
+                        <path
+                          fill="currentColor"
+                          d="m5.5 7.5 4.5 5 4.5-5"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
+                  </div>
+                </label>
+
+                <article className="rounded-xl border border-black/10 bg-white/85 p-3">
+                  <p className="metric-label">Vista previa</p>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-ink/85">
+                        {communityTaskName.trim() || 'Nombre pendiente'}
+                      </p>
+                      <p className="mt-0.5 text-[11px] uppercase tracking-[0.12em] text-ink/55">
+                        {communityTaskCategory || 'Categoría pendiente'}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${createTaskScoreBadgeClass}`}
+                    >
+                      {communityTaskScore} pts
+                    </span>
+                  </div>
+                </article>
+
+                <div className="flex justify-center">
+                  <button type="submit" className="btn-primary inline-flex items-center justify-center">
+                    Guardar tarea
+                  </button>
+                </div>
+              </div>
             </form>
           </div>
         </section>
@@ -417,7 +697,7 @@ function App() {
         <section id="integrantes" className="panel animate-rise p-5 [animation-delay:180ms] sm:p-8">
           <div className="mb-5 flex items-center justify-between gap-3">
             <h2 className="font-heading text-3xl text-ink">Integrantes</h2>
-            <span className="rounded-full bg-black/80 px-3 py-1 text-xs uppercase tracking-[0.15em] text-white">
+            <span className="rounded-full bg-stone-800/85 px-3 py-1 text-xs uppercase tracking-[0.15em] text-white">
               {data?.members.length ?? 0} miembros
             </span>
           </div>
@@ -434,25 +714,28 @@ function App() {
           )}
 
           {!isLoading && !isError && (
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {totalsByMember.map((member) => (
                 <article
                   key={member.name}
-                  className="rounded-2xl border border-black/10 bg-white/80 p-4 shadow-mellow transition hover:-translate-y-1"
+                  className="rounded-[1.35rem] border border-black/12 bg-white/88 px-4 py-3 transition hover:-translate-y-0.5 hover:shadow-mellow"
                 >
-                  <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
                     <span
-                      className="flex h-11 w-11 items-center justify-center rounded-xl text-sm font-semibold text-white"
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg font-semibold text-white"
                       style={{ backgroundColor: member.color }}
                     >
-                      {member.initials}
+                      {member.initials.slice(0, 1)}
                     </span>
-                    <span className="rounded-full bg-black/10 px-3 py-1 text-xs uppercase tracking-[0.13em] text-ink/70">
-                      {member.completed} tareas
-                    </span>
+                    <div className="min-w-0">
+                      <h3 className="truncate font-heading text-2xl leading-none text-ink sm:text-[2rem]">
+                        {member.name}
+                      </h3>
+                      <p className="mt-1 text-sm text-ink/68 sm:text-base">
+                        {member.completed} tareas esta semana
+                      </p>
+                    </div>
                   </div>
-                  <h3 className="font-heading text-2xl text-ink">{member.name}</h3>
-                  <p className="text-sm text-ink/65">{member.role}</p>
                 </article>
               ))}
             </div>
@@ -493,29 +776,15 @@ function App() {
                 className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-4"
               >
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="space-y-1.5">
-                    <span className="metric-label">Integrante activo</span>
-                    <div className="flex items-center gap-2 rounded-xl border border-black/10 bg-white px-2 py-2">
-                      <span
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-xs font-semibold text-white"
-                        style={{ backgroundColor: activeMemberProfile?.color ?? '#64748b' }}
-                        aria-hidden
-                      >
-                        {activeMemberProfile?.initials ?? 'NA'}
-                      </span>
-                      <select
-                        value={activeMember}
-                        onChange={(event) => setActiveMember(event.target.value as MemberName)}
-                        className="w-full border-0 bg-transparent px-1 py-1 text-sm text-ink outline-none ring-0"
-                      >
-                        {data.members.map((member) => (
-                          <option key={member.name} value={member.name}>
-                            {member.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </label>
+                  <div className="flex items-center justify-center">
+                    <span
+                      className="inline-flex h-[3.75rem] w-[3.75rem] items-center justify-center rounded-full text-base font-semibold text-white shadow-sm ring-2 ring-white/80"
+                      style={{ backgroundColor: activeMemberProfile?.color ?? '#8b6a52' }}
+                      title={activeMemberProfile?.name ?? activeMember}
+                    >
+                      {activeMemberProfile?.initials ?? 'NA'}
+                    </span>
+                  </div>
 
                   <label className="space-y-1.5">
                     <span className="metric-label">Fecha</span>
@@ -540,41 +809,76 @@ function App() {
                   </label>
                 </div>
 
-                <label className="space-y-1.5">
+                <label className="space-y-2">
                   <span className="metric-label">Tarea realizada</span>
-                  <select
-                    value={taskDescription}
-                    onChange={(event) => setTaskDescription(event.target.value)}
-                    disabled={communityTasks.length === 0}
-                    className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30 disabled:cursor-not-allowed disabled:bg-black/5"
-                  >
-                    {communityTasks.length === 0 && <option value="">No hay tareas creadas</option>}
-                    {communityTasks.map((task) => (
-                      <option key={task.id} value={task.name}>
-                        {task.name} ({task.score} pts)
-                      </option>
-                    ))}
-                  </select>
+                  <div className="task-field-shell task-field-shell-select">
+                    <span className="task-field-icon task-field-icon-select" aria-hidden>
+                      ✓
+                    </span>
+                    <div className="task-field-select-wrap">
+                      <select
+                        value={taskDescription}
+                        onChange={(event) => setTaskDescription(event.target.value)}
+                        disabled={communityTasks.length === 0}
+                        className="task-field-select task-field-select-task"
+                      >
+                        {communityTasks.length === 0 && <option value="">No hay tareas creadas</option>}
+                        {communityTasks.map((task) => (
+                          <option key={task.id} value={task.name}>
+                            {task.name} · {task.category}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedCommunityTask && (
+                        <span
+                          className={`task-field-badge rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] whitespace-nowrap ${selectedTaskBadgeClass}`}
+                        >
+                          {selectedCommunityTask.score} pts
+                        </span>
+                      )}
+                      <span className="task-field-caret task-field-caret-overlay" aria-hidden>
+                        <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
+                          <path
+                            fill="currentColor"
+                            d="m5.5 7.5 4.5 5 4.5-5"
+                            stroke="currentColor"
+                            strokeWidth="1.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </span>
+                    </div>
+                  </div>
                 </label>
 
-                <label className="space-y-1.5 sm:max-w-[180px]">
-                  <span className="metric-label">Cantidad</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={taskCount}
-                    onChange={(event) => setTaskCount(Number(event.target.value) || 1)}
-                    className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
-                  />
+                <label className="space-y-2 sm:max-w-[220px]">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="metric-label">Cantidad</span>
+                    <span className="rounded-md border border-black/10 bg-white/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/60">
+                      Máx 20
+                    </span>
+                  </div>
+                  <div className="task-field-shell">
+                    <span className="task-field-icon" aria-hidden>
+                      #
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={taskCount}
+                      onChange={(event) => setTaskCount(Number(event.target.value) || 1)}
+                      className="task-field-number"
+                    />
+                  </div>
                 </label>
 
-                <button
-                  type="submit"
-                  className="inline-flex items-center justify-center rounded-xl border border-black/15 bg-black px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
-                >
-                  Registrar tarea
-                </button>
+                <div className="flex justify-center">
+                  <button type="submit" className="btn-primary inline-flex items-center justify-center">
+                    Registrar tarea
+                  </button>
+                </div>
 
                 {formMessage && (
                   <p className="rounded-xl border border-black/10 bg-white/70 px-3 py-2 text-sm text-ink/75">
@@ -586,10 +890,19 @@ function App() {
               <aside className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-4">
                 <article className="rounded-xl border border-black/10 bg-white/85 p-3">
                   <p className="metric-label">Estado de hoy</p>
-                  <p className="mt-1 text-2xl font-heading text-ink">{todayForActiveMember} tareas</p>
-                  <p className="text-xs text-ink/65">
-                    {activeMember} en {todayLabel}
-                  </p>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-2xl font-heading text-ink">{todayForActiveMember} tareas</p>
+                      <p className="text-xs text-ink/65">Integrante activo en {todayLabel}</p>
+                    </div>
+                    <span
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-xs font-semibold text-white"
+                      style={{ backgroundColor: activeMemberProfile?.color ?? '#8b6a52' }}
+                      title={activeMemberProfile?.name ?? activeMember}
+                    >
+                      {activeMemberProfile?.initials ?? 'NA'}
+                    </span>
+                  </div>
                 </article>
 
                 <div>
@@ -609,7 +922,7 @@ function App() {
                         <div className="mb-1 flex items-center justify-between gap-2">
                           <span
                             className="inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-white"
-                            style={{ backgroundColor: memberColorMap[entry.member] ?? '#64748b' }}
+                            style={{ backgroundColor: memberColorMap[entry.member] ?? '#8b6a52' }}
                           >
                             {entry.member}
                           </span>
@@ -708,26 +1021,26 @@ function App() {
                         <CartesianGrid
                           vertical={false}
                           strokeDasharray="3 6"
-                          stroke="rgba(30, 41, 59, 0.2)"
+                          stroke="rgba(94, 74, 59, 0.2)"
                         />
                         <XAxis
                           dataKey="day"
-                          tick={{ fill: '#1f2937', fontSize: 12, fontWeight: 600 }}
+                          tick={{ fill: '#5b4537', fontSize: 12, fontWeight: 600 }}
                           axisLine={false}
                           tickLine={false}
                         />
                         <YAxis
-                          tick={{ fill: '#1f2937', fontSize: 12 }}
+                          tick={{ fill: '#5b4537', fontSize: 12 }}
                           axisLine={false}
                           tickLine={false}
                           allowDecimals={false}
                         />
                         <Tooltip
-                          cursor={{ fill: 'rgba(100, 116, 139, 0.08)' }}
+                          cursor={{ fill: 'rgba(128, 98, 76, 0.09)' }}
                           contentStyle={{
                             borderRadius: '14px',
-                            border: '1px solid rgba(15, 23, 42, 0.12)',
-                            boxShadow: '0 20px 45px -25px rgba(24, 39, 75, 0.35)',
+                            border: '1px solid rgba(88, 67, 51, 0.18)',
+                            boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
                           }}
                         />
                         <Legend wrapperStyle={{ fontSize: '12px', textTransform: 'uppercase' }} />
@@ -747,7 +1060,7 @@ function App() {
                           type="monotone"
                           dataKey="total"
                           name="Total diario"
-                          stroke="#0f172a"
+                          stroke="#51392d"
                           strokeWidth={2.5}
                           dot={{ r: 3, strokeWidth: 1, fill: '#ffffff' }}
                           activeDot={{ r: 5 }}
@@ -785,8 +1098,8 @@ function App() {
                         <Tooltip
                           contentStyle={{
                             borderRadius: '14px',
-                            border: '1px solid rgba(15, 23, 42, 0.12)',
-                            boxShadow: '0 20px 45px -25px rgba(24, 39, 75, 0.35)',
+                            border: '1px solid rgba(88, 67, 51, 0.18)',
+                            boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
                           }}
                         />
                       </PieChart>
@@ -856,11 +1169,11 @@ function App() {
                                 <span
                                   className="inline-flex min-w-12 items-center justify-center rounded-lg px-2 py-1 font-semibold"
                                   style={{
-                                    color: tasks > 0 ? '#ffffff' : 'rgba(30, 41, 59, 0.75)',
+                                    color: tasks > 0 ? '#ffffff' : 'rgba(78, 57, 44, 0.78)',
                                     backgroundColor:
                                       tasks > 0
                                         ? hexToRgba(member.color, alpha)
-                                        : 'rgba(15, 23, 42, 0.07)',
+                                        : 'rgba(117, 89, 70, 0.12)',
                                   }}
                                 >
                                   {tasks}
@@ -885,6 +1198,67 @@ function App() {
           )}
         </section>
       </main>
+
+      {toasts.length > 0 && (
+        <div className="pointer-events-none fixed right-4 top-4 z-[60] flex w-[min(92vw,360px)] flex-col gap-2">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              role="status"
+              aria-live="polite"
+              className={`rounded-xl border px-4 py-3 text-sm shadow-lg backdrop-blur-sm ${
+                toast.variant === 'error'
+                  ? 'border-red-300 bg-red-50/95 text-red-800'
+                  : 'border-emerald-300 bg-emerald-50/95 text-emerald-800'
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {taskToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/35"
+            onClick={() => setTaskToDelete(null)}
+            aria-label="Cerrar confirmación"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-task-title"
+            className="relative w-full max-w-md rounded-2xl border border-black/15 bg-[color:var(--card)] p-5 shadow-xl"
+          >
+            <p className="text-[11px] uppercase tracking-[0.14em] text-ink/60">Confirmación</p>
+            <h3 id="delete-task-title" className="mt-1 font-heading text-2xl text-ink">
+              Eliminar tarea
+            </h3>
+            <p className="mt-2 text-sm text-ink/70">
+              Se eliminará <strong>{taskToDelete.name}</strong> ({taskToDelete.category},{' '}
+              {taskToDelete.score} pts). Esta acción no se puede deshacer.
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setTaskToDelete(null)}
+                className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm font-medium text-ink/80 transition hover:border-black/30"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteTask}
+                className="rounded-lg border border-red-300 bg-red-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+              >
+                Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

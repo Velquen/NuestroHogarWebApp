@@ -5,9 +5,16 @@
 @tailwind utilities;
 
 :root {
-  --bg: 35 54% 94%;
-  --ink: 210 30% 14%;
-  --panel: 43 64% 98%;
+  --bg: 38 52% 94%;
+  --ink: 25 24% 22%;
+  --panel: 42 58% 97%;
+  --task-item-height: 4.25rem;
+  --task-list-gap: 0.5rem;
+  --task-list-visible-items: 4;
+  --task-list-max-h: calc(
+    (var(--task-item-height) * var(--task-list-visible-items)) +
+    (var(--task-list-gap) * (var(--task-list-visible-items) - 1))
+  );
 }
 
 * {
@@ -17,12 +24,26 @@
 body {
   margin: 0;
   min-height: 100vh;
-  color: hsl(var(--ink));
-  font-family: 'Manrope', sans-serif;
+  color: var(--foreground);
+  font-family: var(--font-sans), 'Manrope', sans-serif;
+  background-color: var(--background);
   background:
-    radial-gradient(circle at 18% 12%, rgba(202, 90, 46, 0.25), transparent 35%),
-    radial-gradient(circle at 86% 88%, rgba(45, 129, 137, 0.22), transparent 28%),
-    linear-gradient(140deg, #f6efe4, #f4e4d2 52%, #f7f5ed 100%);
+    radial-gradient(
+      circle at 14% 10%,
+      color-mix(in oklab, var(--primary) 30%, transparent),
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at 86% 88%,
+      color-mix(in oklab, var(--accent) 34%, transparent),
+      transparent 36%
+    ),
+    linear-gradient(
+      145deg,
+      var(--background),
+      color-mix(in oklab, var(--card) 78%, var(--background)) 56%,
+      var(--background)
+    );
 }
 
 body::before {
@@ -30,9 +51,12 @@ body::before {
   pointer-events: none;
   position: fixed;
   inset: 0;
-  background-image: radial-gradient(rgba(20, 29, 45, 0.07) 0.5px, transparent 0.5px);
+  background-image: radial-gradient(
+    color-mix(in oklab, var(--foreground) 12%, transparent) 0.5px,
+    transparent 0.5px
+  );
   background-size: 3px 3px;
-  opacity: 0.45;
+  opacity: 0.3;
 }
 
 #root {
@@ -41,15 +65,18 @@ body::before {
 
 @layer components {
   .panel {
-    @apply rounded-[2rem] border border-black/10 bg-[hsl(var(--panel)/0.9)] shadow-mellow backdrop-blur-sm;
+    border: 1px solid color-mix(in oklab, var(--border) 75%, transparent);
+    background: color-mix(in oklab, var(--card) 92%, transparent);
+    box-shadow: var(--shadow-lg);
+    @apply rounded-[2rem] backdrop-blur-sm;
   }
 
   .font-heading {
-    font-family: 'Fraunces', serif;
+    font-family: 'Fraunces', var(--font-serif), serif;
   }
 
   .text-ink {
-    color: hsl(var(--ink));
+    color: var(--foreground);
   }
 
   .bg-orb-1,
@@ -60,17 +87,37 @@ body::before {
   .bg-orb-1 {
     top: -90px;
     left: -80px;
-    background: radial-gradient(circle, rgba(202, 90, 46, 0.35), transparent 68%);
+    background: radial-gradient(circle, rgba(182, 96, 56, 0.34), transparent 70%);
   }
 
   .bg-orb-2 {
     bottom: -90px;
     right: -20px;
-    background: radial-gradient(circle, rgba(45, 129, 137, 0.34), transparent 70%);
+    background: radial-gradient(circle, rgba(126, 142, 88, 0.3), transparent 72%);
   }
 
   .dashboard-card {
-    @apply rounded-2xl border border-black/10 bg-white/80 p-4;
+    border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+    background: color-mix(in oklab, var(--card) 96%, transparent);
+    box-shadow: var(--shadow-sm);
+    @apply rounded-2xl p-4;
+  }
+
+  .btn-primary {
+    border: 1px solid color-mix(in oklab, var(--primary) 45%, var(--border));
+    background: linear-gradient(
+      132deg,
+      color-mix(in oklab, var(--primary) 92%, white),
+      color-mix(in oklab, var(--primary) 76%, var(--accent))
+    );
+    color: var(--primary-foreground);
+    box-shadow: 0 16px 30px -22px color-mix(in oklab, var(--primary) 68%, transparent);
+    @apply rounded-xl px-4 py-2 text-sm font-semibold transition;
+  }
+
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    filter: saturate(1.08);
   }
 
   .metric-label {
@@ -90,6 +137,229 @@ body::before {
   }
 
   .table-cell {
-    @apply border-y border-black/5 bg-white/70 px-3 py-2 text-ink/70;
+    border-top: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+    border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+    background: color-mix(in oklab, var(--card) 88%, transparent);
+    @apply px-3 py-2 text-ink/70;
+  }
+
+  .task-list-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--task-list-gap);
+  }
+
+  .task-list-item {
+    min-height: var(--task-item-height);
+  }
+
+  .task-list-scroll {
+    max-height: var(--task-list-max-h);
+    overflow-y: auto;
+    padding-right: 0.25rem;
+    padding-bottom: 0.125rem;
+  }
+
+  .task-list-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .task-list-scroll::-webkit-scrollbar-track {
+    background: color-mix(in oklab, var(--muted) 55%, transparent);
+    border-radius: 999px;
+  }
+
+  .task-list-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--primary) 45%, var(--accent));
+    border-radius: 999px;
+  }
+
+  .task-field-shell {
+    border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+    background: linear-gradient(
+      145deg,
+      color-mix(in oklab, var(--card) 95%, white),
+      color-mix(in oklab, var(--card) 85%, var(--muted))
+    );
+    box-shadow: inset 0 1px 0 color-mix(in oklab, white 62%, transparent);
+    @apply flex items-center gap-2 rounded-2xl px-2.5 py-2 transition;
+  }
+
+  .task-field-shell:focus-within {
+    border-color: color-mix(in oklab, var(--primary) 52%, var(--border));
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, white 68%, transparent),
+      0 0 0 3px color-mix(in oklab, var(--primary) 16%, transparent);
+  }
+
+  .task-field-icon {
+    border: 1px solid color-mix(in oklab, var(--primary) 18%, transparent);
+    background: color-mix(in oklab, var(--primary) 18%, white);
+    color: color-mix(in oklab, var(--primary) 74%, var(--foreground));
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold;
+  }
+
+  .task-field-select {
+    @apply min-w-0 flex-1 border-0 bg-transparent py-1 text-sm font-semibold text-ink outline-none ring-0 disabled:cursor-not-allowed disabled:text-ink/45;
+    appearance: none;
+  }
+
+  .task-field-shell-select {
+    @apply relative min-h-[3rem];
+  }
+
+  .task-field-icon-select {
+    @apply pointer-events-none absolute left-2.5 top-1/2 z-[1] -translate-y-1/2;
+  }
+
+  .task-field-select-wrap {
+    @apply relative flex min-w-0 flex-1 items-center;
+  }
+
+  .task-field-select-task {
+    @apply relative z-[2] w-full pl-11 pr-24;
+  }
+
+  .task-field-badge {
+    @apply pointer-events-none absolute right-9 top-1/2 z-[1] -translate-y-1/2;
+  }
+
+  .task-field-caret {
+    color: color-mix(in oklab, var(--foreground) 60%, var(--primary));
+    @apply pointer-events-none inline-flex shrink-0 items-center justify-center;
+  }
+
+  .task-field-caret-overlay {
+    @apply absolute right-2.5 top-1/2 z-[1] -translate-y-1/2;
+  }
+
+  .task-field-number {
+    @apply w-full border-0 bg-transparent py-1 text-sm font-semibold text-ink outline-none ring-0;
+  }
+}
+
+@layer base {
+  .theme {
+    --font-sans: Libre Baskerville, serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    --radius: 0.5rem;
+    --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
+    --tracking-tight: calc(var(--tracking-normal) - 0.025em);
+    --tracking-wide: calc(var(--tracking-normal) + 0.025em);
+    --tracking-wider: calc(var(--tracking-normal) + 0.05em);
+    --tracking-widest: calc(var(--tracking-normal) + 0.1em);
+  }
+  :root {
+    --background: oklch(0.9690 0.0180 85.5000);
+    --foreground: oklch(0.3220 0.0300 45.8000);
+    --card: oklch(0.9860 0.0130 88.2000);
+    --card-foreground: oklch(0.3220 0.0300 45.8000);
+    --popover: oklch(0.9920 0.0140 89.6000);
+    --popover-foreground: oklch(0.3220 0.0300 45.8000);
+    --primary: oklch(0.6260 0.1270 46.2000);
+    --primary-foreground: oklch(0.9850 0.0100 90.0000);
+    --secondary: oklch(0.8460 0.0830 82.5000);
+    --secondary-foreground: oklch(0.3220 0.0300 45.8000);
+    --muted: oklch(0.9300 0.0170 84.0000);
+    --muted-foreground: oklch(0.4970 0.0390 49.5000);
+    --accent: oklch(0.6840 0.0710 150.5000);
+    --accent-foreground: oklch(0.9850 0.0100 90.0000);
+    --destructive: oklch(0.5820 0.1700 27.5000);
+    --destructive-foreground: oklch(0.9850 0.0100 90.0000);
+    --border: oklch(0.8500 0.0200 78.5000);
+    --input: oklch(0.8780 0.0180 81.2000);
+    --ring: oklch(0.6260 0.1270 46.2000);
+    --chart-1: oklch(0.6260 0.1270 46.2000);
+    --chart-2: oklch(0.6840 0.0710 150.5000);
+    --chart-3: oklch(0.7700 0.0950 82.0000);
+    --chart-4: oklch(0.6620 0.0440 61.0000);
+    --chart-5: oklch(0.5450 0.0920 34.0000);
+    --radius: 0.5rem;
+    --sidebar: oklch(0.9860 0.0130 88.2000);
+    --sidebar-foreground: oklch(0.3220 0.0300 45.8000);
+    --sidebar-primary: oklch(0.6260 0.1270 46.2000);
+    --sidebar-primary-foreground: oklch(0.9850 0.0100 90.0000);
+    --sidebar-accent: oklch(0.8460 0.0830 82.5000);
+    --sidebar-accent-foreground: oklch(0.3220 0.0300 45.8000);
+    --sidebar-border: oklch(0.8500 0.0200 78.5000);
+    --sidebar-ring: oklch(0.6260 0.1270 46.2000);
+    --font-sans: Libre Baskerville, serif;
+    --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --shadow-color: oklch(0 0 0);
+    --shadow-opacity: 0.1;
+    --shadow-blur: 3px;
+    --shadow-spread: 0px;
+    --shadow-offset-x: 0;
+    --shadow-offset-y: 1px;
+    --letter-spacing: 0em;
+    --spacing: 0.25rem;
+    --shadow-2xs: 0 1px 3px 0px hsl(24 34% 24% / 0.06);
+    --shadow-xs: 0 1px 3px 0px hsl(24 34% 24% / 0.06);
+    --shadow-sm: 0 1px 3px 0px hsl(24 34% 24% / 0.11), 0 1px 2px -1px hsl(24 34% 24% / 0.11);
+    --shadow: 0 1px 3px 0px hsl(24 34% 24% / 0.12), 0 1px 2px -1px hsl(24 34% 24% / 0.12);
+    --shadow-md: 0 1px 3px 0px hsl(24 34% 24% / 0.12), 0 2px 4px -1px hsl(24 34% 24% / 0.12);
+    --shadow-lg: 0 1px 3px 0px hsl(24 34% 24% / 0.12), 0 4px 6px -1px hsl(24 34% 24% / 0.12);
+    --shadow-xl: 0 1px 3px 0px hsl(24 34% 24% / 0.14), 0 8px 10px -1px hsl(24 34% 24% / 0.14);
+    --shadow-2xl: 0 1px 3px 0px hsl(24 34% 24% / 0.3);
+    --tracking-normal: 0em;
+  }
+  .dark {
+    --background: oklch(0.2520 0.0200 44.5000);
+    --foreground: oklch(0.9430 0.0130 87.0000);
+    --card: oklch(0.2970 0.0220 45.2000);
+    --card-foreground: oklch(0.9430 0.0130 87.0000);
+    --popover: oklch(0.3070 0.0220 45.5000);
+    --popover-foreground: oklch(0.9430 0.0130 87.0000);
+    --primary: oklch(0.7080 0.1120 49.0000);
+    --primary-foreground: oklch(0.2350 0.0200 43.0000);
+    --secondary: oklch(0.6380 0.0720 81.0000);
+    --secondary-foreground: oklch(0.9430 0.0130 87.0000);
+    --muted: oklch(0.3320 0.0200 47.0000);
+    --muted-foreground: oklch(0.7600 0.0280 80.0000);
+    --accent: oklch(0.6500 0.0740 150.0000);
+    --accent-foreground: oklch(0.2460 0.0180 45.0000);
+    --destructive: oklch(0.6200 0.1600 28.0000);
+    --destructive-foreground: oklch(0.9430 0.0130 87.0000);
+    --border: oklch(0.3900 0.0180 49.0000);
+    --input: oklch(0.4550 0.0300 50.0000);
+    --ring: oklch(0.7080 0.1120 49.0000);
+    --chart-1: oklch(0.7080 0.1120 49.0000);
+    --chart-2: oklch(0.6500 0.0740 150.0000);
+    --chart-3: oklch(0.7350 0.0880 83.0000);
+    --chart-4: oklch(0.6250 0.0460 62.0000);
+    --chart-5: oklch(0.5750 0.0980 32.0000);
+    --radius: 0.5rem;
+    --sidebar: oklch(0.2970 0.0220 45.2000);
+    --sidebar-foreground: oklch(0.9430 0.0130 87.0000);
+    --sidebar-primary: oklch(0.7080 0.1120 49.0000);
+    --sidebar-primary-foreground: oklch(0.2350 0.0200 43.0000);
+    --sidebar-accent: oklch(0.6380 0.0720 81.0000);
+    --sidebar-accent-foreground: oklch(0.9430 0.0130 87.0000);
+    --sidebar-border: oklch(0.3900 0.0180 49.0000);
+    --sidebar-ring: oklch(0.7080 0.1120 49.0000);
+    --font-sans: Libre Baskerville, serif;
+    --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --shadow-color: oklch(0 0 0);
+    --shadow-opacity: 0.1;
+    --shadow-blur: 3px;
+    --shadow-spread: 0px;
+    --shadow-offset-x: 0;
+    --shadow-offset-y: 1px;
+    --letter-spacing: 0em;
+    --spacing: 0.25rem;
+    --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+    --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+    --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+    --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+    --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 2px 4px -1px hsl(0 0% 0% / 0.10);
+    --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 4px 6px -1px hsl(0 0% 0% / 0.10);
+    --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 8px 10px -1px hsl(0 0% 0% / 0.10);
+    --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
+  }
+  body {
+    letter-spacing: var(--tracking-normal);
   }
 }

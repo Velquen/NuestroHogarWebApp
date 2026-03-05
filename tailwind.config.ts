@@ -8,7 +8,7 @@ export default {
         ink: 'hsl(var(--ink) / <alpha-value>)',
       },
       boxShadow: {
-        mellow: '0 20px 45px -25px rgba(24, 39, 75, 0.35)',
+        mellow: '0 20px 45px -25px rgba(96, 64, 40, 0.35)',
       },
       keyframes: {
         rise: {

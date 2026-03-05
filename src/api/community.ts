@@ -3,9 +3,9 @@ import type { CommunityDashboardData } from '../types/community';
 const mockCommunityData: CommunityDashboardData = {
   communityName: 'Nuestro Hogar',
   members: [
-    { name: 'Gaspar', role: 'Encargado de cocina', color: '#ca5a2e', initials: 'GA' },
-    { name: 'Cristobal', role: 'Encargado de limpieza', color: '#2d8189', initials: 'CR' },
-    { name: 'Fernanda', role: 'Encargada de compras', color: '#c88a20', initials: 'FE' },
+    { name: 'Gaspar', role: 'Encargado de cocina', color: '#b65f36', initials: 'GA' },
+    { name: 'Cristobal', role: 'Encargado de limpieza', color: '#778a4f', initials: 'CR' },
+    { name: 'Fernanda', role: 'Encargada de compras', color: '#ba8f34', initials: 'FE' },
   ],
   weeklyActivities: [
     { day: 'Lunes', Gaspar: 3, Cristobal: 1, Fernanda: 2 },
