@@ -64,6 +64,8 @@ interface RecentLogTone {
   soft: string;
 }
 
+type AuthMode = 'sign-in' | 'sign-up';
+
 const weekdayMap: Record<string, string> = {
   lunes: 'Lunes',
   martes: 'Martes',
@@ -81,6 +83,34 @@ const getScoreBadgeClass = (score: number) =>
       ? 'border-orange-200 bg-orange-100 text-orange-800'
       : 'border-lime-200 bg-lime-100 text-lime-800';
 
+function getFriendlyAuthErrorMessage(authError: unknown, authMode: AuthMode) {
+  const fallbackMessage =
+    authMode === 'sign-up' ? 'No se pudo crear la cuenta.' : 'No se pudo iniciar sesión.';
+
+  const rawMessage = authError instanceof Error ? authError.message : '';
+  if (!rawMessage) {
+    return fallbackMessage;
+  }
+
+  const normalized = rawMessage.toLowerCase();
+
+  if (
+    normalized.includes('email address') &&
+    normalized.includes('is invalid')
+  ) {
+    return 'Supabase rechazó el correo para registro. Revisa Auth > SMTP en Supabase (dominios autorizados/proveedor) y vuelve a intentar.';
+  }
+
+  if (
+    normalized.includes('over_email_send_rate_limit') ||
+    normalized.includes('email rate limit exceeded')
+  ) {
+    return 'Se alcanzó el límite de correos de verificación en Supabase. Espera unos minutos o configura SMTP propio en Auth > SMTP.';
+  }
+
+  return rawMessage;
+}
+
 function App() {
   const queryClient = useQueryClient();
   const [session, setSession] = useState<Session | null>(null);
@@ -88,8 +118,10 @@ function App() {
   const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [authMode, setAuthMode] = useState<AuthMode>('sign-in');
   const [isLoginSubmitting, setIsLoginSubmitting] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginSuccess, setLoginSuccess] = useState<string | null>(null);
   const [inviteToken, setInviteToken] = useState<string | null>(() => getInviteTokenFromUrl());
   const [isAcceptingInvite, setIsAcceptingInvite] = useState(false);
   const [inviteLinkValue, setInviteLinkValue] = useState<string | null>(null);
@@ -130,6 +162,7 @@ function App() {
       setSession(nextSession);
       if (nextSession) {
         setLoginError(null);
+        setLoginSuccess(null);
       }
     });
 
@@ -743,31 +776,67 @@ function App() {
     event.preventDefault();
 
     if (!isSupabaseConfigured) {
+      setLoginSuccess(null);
       setLoginError('Configura VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.');
       return;
     }
 
     const email = loginEmail.trim();
     if (!email || !loginPassword) {
-      setLoginError('Completa correo y contraseña.');
+      setLoginSuccess(null);
+      setLoginError(
+        authMode === 'sign-up'
+          ? 'Completa correo y contraseña para crear tu cuenta.'
+          : 'Completa correo y contraseña.',
+      );
+      return;
+    }
+
+    if (authMode === 'sign-up' && loginPassword.length < 6) {
+      setLoginSuccess(null);
+      setLoginError('La contraseña debe tener al menos 6 caracteres.');
       return;
     }
 
     setIsLoginSubmitting(true);
     setLoginError(null);
+    setLoginSuccess(null);
 
     try {
       const supabase = getSupabaseClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password: loginPassword,
-      });
 
-      if (signInError) {
-        throw signInError;
+      if (authMode === 'sign-up') {
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password: loginPassword,
+          options: {
+            emailRedirectTo: window.location.origin,
+          },
+        });
+
+        if (signUpError) {
+          throw signUpError;
+        }
+
+        if (!signUpData.session) {
+          setLoginSuccess(
+            'Cuenta creada. Revisa tu correo para confirmar y luego inicia sesión.',
+          );
+          setAuthMode('sign-in');
+          setLoginPassword('');
+        }
+      } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password: loginPassword,
+        });
+
+        if (signInError) {
+          throw signInError;
+        }
       }
     } catch (authError) {
-      const message = authError instanceof Error ? authError.message : 'No se pudo iniciar sesión.';
+      const message = getFriendlyAuthErrorMessage(authError, authMode);
       setLoginError(message);
     } finally {
       setIsLoginSubmitting(false);
@@ -1006,6 +1075,11 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
   }
 
   if (!session) {
+    const authPanelTitle = authMode === 'sign-up' ? 'Crear cuenta' : 'Bienvenido';
+    const authPanelSubtitle = authMode === 'sign-up' ? 'Crear cuenta' : 'Iniciar sesión';
+    const authButtonLabel = authMode === 'sign-up' ? 'Crear cuenta en Supabase' : 'Entrar a mi comunidad';
+    const authButtonLoadingLabel = authMode === 'sign-up' ? 'Creando cuenta...' : 'Ingresando...';
+
     return (
       <div className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8">
         <div className="bg-orb-1" aria-hidden />
@@ -1021,11 +1095,11 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   Entra a tu comunidad y registra tus tareas reales
                 </h1>
                 <p className="mt-4 max-w-xl text-sm text-ink/72 sm:text-base">
-                  Inicia sesión con tu cuenta de Supabase para ver integrantes, tareas de la comunidad
-                  y métricas del período.
+                  Inicia sesión o crea una cuenta con Supabase para ver integrantes, tareas de la
+                  comunidad y métricas del período.
                 </p>
                 <div className="mt-6 grid gap-2 text-sm text-ink/70">
-                  <p>1. Accede con correo y contraseña.</p>
+                  <p>1. Entra con tu correo o crea una cuenta nueva.</p>
                   <p>2. La app carga tu comunidad activa automáticamente.</p>
                   <p>3. Desde ahí ya puedes registrar tareas y puntos.</p>
                 </div>
@@ -1040,8 +1114,43 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                 onSubmit={handleLoginSubmit}
                 className="rounded-[1.6rem] border border-amber-900/14 bg-white/86 p-5 shadow-lg backdrop-blur-sm sm:p-6"
               >
-                <p className="text-xs uppercase tracking-[0.16em] text-ink/58">Iniciar sesión</p>
-                <h2 className="mt-1 font-heading text-3xl text-ink">Bienvenido</h2>
+                <div className="auth-mode-shell">
+                  <p className="auth-mode-caption">Modo de acceso</p>
+                  <div className="auth-mode-switch" role="tablist" aria-label="Modo de acceso" data-mode={authMode}>
+                    <span className="auth-mode-pill" aria-hidden />
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={authMode === 'sign-in'}
+                      aria-pressed={authMode === 'sign-in'}
+                      onClick={() => {
+                        setAuthMode('sign-in');
+                        setLoginError(null);
+                        setLoginSuccess(null);
+                      }}
+                      className={`auth-mode-button ${authMode === 'sign-in' ? 'is-active' : ''}`}
+                    >
+                      Iniciar sesión
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={authMode === 'sign-up'}
+                      aria-pressed={authMode === 'sign-up'}
+                      onClick={() => {
+                        setAuthMode('sign-up');
+                        setLoginError(null);
+                        setLoginSuccess(null);
+                      }}
+                      className={`auth-mode-button ${authMode === 'sign-up' ? 'is-active' : ''}`}
+                    >
+                      Crear cuenta
+                    </button>
+                  </div>
+                </div>
+
+                <p className="mt-4 text-xs uppercase tracking-[0.16em] text-ink/58">{authPanelSubtitle}</p>
+                <h2 className="mt-1 font-heading text-3xl text-ink">{authPanelTitle}</h2>
 
                 <label className="mt-5 block space-y-1.5">
                   <span className="metric-label">Correo</span>
@@ -1059,13 +1168,19 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   <span className="metric-label">Contraseña</span>
                   <input
                     type="password"
-                    autoComplete="current-password"
+                    autoComplete={authMode === 'sign-up' ? 'new-password' : 'current-password'}
                     value={loginPassword}
                     onChange={(event) => setLoginPassword(event.target.value)}
                     placeholder="••••••••"
                     className="w-full rounded-xl border border-black/12 bg-white/92 px-3 py-2.5 text-sm text-ink outline-none transition focus:border-black/30"
                   />
                 </label>
+
+                {loginSuccess && (
+                  <p className="mt-4 rounded-xl border border-lime-300 bg-lime-50 px-3 py-2 text-sm text-lime-800">
+                    {loginSuccess}
+                  </p>
+                )}
 
                 {loginError && (
                   <p className="mt-4 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -1078,7 +1193,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   disabled={isLoginSubmitting}
                   className="btn-primary mt-5 inline-flex w-full items-center justify-center disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {isLoginSubmitting ? 'Ingresando...' : 'Entrar a mi comunidad'}
+                  {isLoginSubmitting ? authButtonLoadingLabel : authButtonLabel}
                 </button>
               </form>
             </div>

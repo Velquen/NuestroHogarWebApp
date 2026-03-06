@@ -187,6 +187,53 @@ body::before {
     filter: saturate(1.08);
   }
 
+  .auth-mode-shell {
+    @apply space-y-2;
+  }
+
+  .auth-mode-caption {
+    color: color-mix(in oklab, var(--foreground) 54%, transparent);
+    @apply text-[10px] font-medium uppercase tracking-[0.16em];
+  }
+
+  .auth-mode-switch {
+    position: relative;
+    border-bottom: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+    @apply grid grid-cols-2 gap-1;
+  }
+
+  .auth-mode-pill {
+    pointer-events: none;
+    position: absolute;
+    z-index: 0;
+    left: 0;
+    bottom: -1px;
+    width: 50%;
+    height: 2px;
+    background: color-mix(in oklab, var(--foreground) 88%, var(--primary));
+    transition: transform 220ms ease;
+  }
+
+  .auth-mode-switch[data-mode='sign-up'] .auth-mode-pill {
+    transform: translateX(100%);
+  }
+
+  .auth-mode-button {
+    position: relative;
+    z-index: 1;
+    color: color-mix(in oklab, var(--foreground) 56%, transparent);
+    @apply rounded-md px-3 py-2.5 text-center text-sm font-medium transition;
+  }
+
+  .auth-mode-button:hover {
+    color: color-mix(in oklab, var(--foreground) 82%, transparent);
+    background: color-mix(in oklab, var(--muted) 45%, transparent);
+  }
+
+  .auth-mode-button.is-active {
+    color: color-mix(in oklab, var(--foreground) 95%, transparent);
+  }
+
   .metric-label {
     @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/65;
   }
@@ -488,6 +535,10 @@ body::before {
 }
 
 @media (max-width: 640px) {
+  .auth-mode-button {
+    @apply px-2 py-2 text-[0.9rem];
+  }
+
   .task-field-select-task {
     padding-right: 5.9rem;
   }
