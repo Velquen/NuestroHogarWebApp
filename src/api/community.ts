@@ -1,8 +1,9 @@
 import { getSupabaseClient } from '../lib/supabase';
-import type { CommunityDashboardData, Member, WeeklyActivity } from '../types/community';
+import type { CommunityDashboardData, CommunityRoleKey, Member, WeeklyActivity } from '../types/community';
 
 interface MembershipRow {
   community_id: string;
+  role: CommunityRoleKey;
   communities: {
     name: string;
   } | null;
@@ -10,7 +11,7 @@ interface MembershipRow {
 
 interface MemberRow {
   user_id: string;
-  role: 'owner' | 'admin' | 'member';
+  role: CommunityRoleKey;
   profiles: {
     display_name: string;
     profile_alias: string | null;
@@ -34,6 +35,30 @@ interface PresenceRow {
   present_count: number;
 }
 
+interface CreateCommunityInviteRow {
+  token: string;
+  expires_at: string;
+  community_id: string;
+}
+
+interface AcceptCommunityInviteRow {
+  status: 'joined' | 'already_member' | 'reactivated';
+  community_id: string;
+  community_name: string;
+}
+
+export interface CommunityInviteLinkData {
+  token: string;
+  inviteLink: string;
+  expiresAt: string;
+}
+
+export interface AcceptCommunityInviteResult {
+  status: 'joined' | 'already_member' | 'reactivated';
+  communityId: string;
+  communityName: string;
+}
+
 const fallbackPalette = ['#b65f36', '#778a4f', '#ba8f34', '#5f7eb8', '#8f4db1', '#5b8c6d'];
 
 const weekdayMap: Record<string, string> = {
@@ -46,7 +71,7 @@ const weekdayMap: Record<string, string> = {
   sunday: 'Domingo',
 };
 
-const roleLabels: Record<'owner' | 'admin' | 'member', string> = {
+const roleLabels: Record<CommunityRoleKey, string> = {
   owner: 'Propietario',
   admin: 'Administrador',
   member: 'Integrante',
@@ -100,6 +125,7 @@ function toMember(row: MemberRow, index: number): Member {
     baseName,
     alias,
     name: displayName,
+    roleKey: row.role,
     role: roleLabels[row.role],
     color: row.profiles?.avatar_color ?? fallbackPalette[index % fallbackPalette.length],
     avatarIconKey: row.profiles?.avatar_icon_key ?? 'leaf_svg',
@@ -107,7 +133,9 @@ function toMember(row: MemberRow, index: number): Member {
   };
 }
 
-export async function fetchCommunityDashboard(): Promise<CommunityDashboardData> {
+export async function fetchCommunityDashboard(
+  preferredCommunityId?: string | null,
+): Promise<CommunityDashboardData> {
   const supabase = getSupabaseClient();
 
   const {
@@ -123,26 +151,35 @@ export async function fetchCommunityDashboard(): Promise<CommunityDashboardData>
     throw new Error('No hay sesión activa en Supabase');
   }
 
-  const { data: membership, error: membershipError } = await supabase
+  const { data: membershipsData, error: membershipsError } = await supabase
     .from('community_memberships')
-    .select('community_id, communities(name)')
+    .select('community_id, role, communities(name)')
     .eq('user_id', user.id)
     .eq('status', 'active')
     .order('joined_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .returns<MembershipRow[]>();
 
-  if (membershipError) {
-    throw new Error(`No se pudo obtener la comunidad del usuario: ${membershipError.message}`);
+  if (membershipsError) {
+    throw new Error(`No se pudieron obtener las comunidades del usuario: ${membershipsError.message}`);
   }
 
-  if (!membership) {
+  const memberships = membershipsData ?? [];
+
+  if (memberships.length === 0) {
     throw new Error('El usuario no pertenece a ninguna comunidad activa');
   }
 
-  const typedMembership = membership as MembershipRow;
-  const communityId = typedMembership.community_id;
-  const communityName = typedMembership.communities?.name ?? 'Comunidad';
+  const selectedMembership =
+    (preferredCommunityId
+      ? memberships.find((membership) => membership.community_id === preferredCommunityId)
+      : null) ?? memberships[0];
+  const communityId = selectedMembership.community_id;
+  const communityName = selectedMembership.communities?.name ?? 'Comunidad';
+  const userCommunities = memberships.map((membership) => ({
+    id: membership.community_id,
+    name: membership.communities?.name ?? 'Comunidad',
+    roleKey: membership.role,
+  }));
 
   const { data: membersData, error: membersError } = await supabase
     .from('community_memberships')
@@ -176,6 +213,8 @@ export async function fetchCommunityDashboard(): Promise<CommunityDashboardData>
     throw new Error(`No se pudieron obtener las métricas semanales: ${metricsError.message}`);
   }
 
+  const metricsRows = Array.isArray(metricsData) ? metricsData : [];
+
   const { data: presenceRows, error: presenceError } = await supabase
     .rpc('rpc_community_presence', {
       p_community_id: communityId,
@@ -186,6 +225,8 @@ export async function fetchCommunityDashboard(): Promise<CommunityDashboardData>
   if (presenceError) {
     throw new Error(`No se pudo obtener presencia diaria: ${presenceError.message}`);
   }
+
+  const safePresenceRows = Array.isArray(presenceRows) ? presenceRows : [];
 
   const weekRowsByDate = new Map<string, WeeklyActivity>();
 
@@ -205,7 +246,7 @@ export async function fetchCommunityDashboard(): Promise<CommunityDashboardData>
 
   const memberNameByUserId = new Map(members.map((member) => [member.userId, member.name]));
 
-  for (const metric of metricsData ?? []) {
+  for (const metric of metricsRows) {
     const row = weekRowsByDate.get(metric.metric_date);
     const memberName = memberNameByUserId.get(metric.member_user_id);
 
@@ -217,11 +258,11 @@ export async function fetchCommunityDashboard(): Promise<CommunityDashboardData>
     row[memberName] = current + Number(metric.tasks_count ?? 0);
   }
 
-  const presenceToday = presenceRows?.[0]
+  const presenceToday = safePresenceRows[0]
     ? {
-        activeMembersCount: Number(presenceRows[0].active_members_count ?? 0),
-        awayCount: Number(presenceRows[0].away_count ?? 0),
-        presentCount: Number(presenceRows[0].present_count ?? 0),
+        activeMembersCount: Number(safePresenceRows[0].active_members_count ?? 0),
+        awayCount: Number(safePresenceRows[0].away_count ?? 0),
+        presentCount: Number(safePresenceRows[0].present_count ?? 0),
       }
     : null;
 
@@ -229,8 +270,76 @@ export async function fetchCommunityDashboard(): Promise<CommunityDashboardData>
     communityId,
     currentUserId: user.id,
     communityName,
+    userCommunities,
     members,
     weeklyActivities: Array.from(weekRowsByDate.values()),
     presenceToday,
+  };
+}
+
+export async function createCommunityInviteLink(
+  communityId: string,
+): Promise<CommunityInviteLinkData> {
+  const supabase = getSupabaseClient();
+
+  const normalizedCommunityId = communityId.trim();
+  if (!normalizedCommunityId) {
+    throw new Error('No se encontró una comunidad activa para invitar.');
+  }
+
+  const { data, error } = await supabase
+    .rpc('rpc_create_community_invite', {
+      p_community_id: normalizedCommunityId,
+    })
+    .returns<CreateCommunityInviteRow[]>();
+
+  if (error) {
+    throw new Error(`No se pudo generar la invitación: ${error.message}`);
+  }
+
+  const inviteRow = Array.isArray(data) ? data[0] : null;
+  if (!inviteRow?.token) {
+    throw new Error('No se pudo obtener el token de invitación.');
+  }
+
+  const inviteUrl = new URL(window.location.href);
+  inviteUrl.searchParams.set('invite', inviteRow.token);
+
+  return {
+    token: inviteRow.token,
+    inviteLink: inviteUrl.toString(),
+    expiresAt: inviteRow.expires_at,
+  };
+}
+
+export async function acceptCommunityInviteByToken(
+  token: string,
+): Promise<AcceptCommunityInviteResult> {
+  const supabase = getSupabaseClient();
+  const normalizedToken = token.trim();
+
+  if (!normalizedToken) {
+    throw new Error('La invitación no es válida.');
+  }
+
+  const { data, error } = await supabase
+    .rpc('rpc_accept_community_invite', {
+      p_token: normalizedToken,
+    })
+    .returns<AcceptCommunityInviteRow[]>();
+
+  if (error) {
+    throw new Error(`No se pudo aceptar la invitación: ${error.message}`);
+  }
+
+  const resultRow = Array.isArray(data) ? data[0] : null;
+  if (!resultRow?.community_id || !resultRow?.community_name || !resultRow?.status) {
+    throw new Error('La invitación no devolvió un resultado válido.');
+  }
+
+  return {
+    status: resultRow.status,
+    communityId: resultRow.community_id,
+    communityName: resultRow.community_name,
   };
 }

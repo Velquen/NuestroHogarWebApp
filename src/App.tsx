@@ -15,8 +15,12 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { fetchCommunityDashboard } from './api/community';
-import { createCommunity, updateMyProfileSettings } from './api/profile';
+import {
+  acceptCommunityInviteByToken,
+  createCommunityInviteLink,
+  fetchCommunityDashboard,
+} from './api/community';
+import { createCommunity, deleteCommunity, updateMyProfileSettings } from './api/profile';
 import {
   createCommunityTask,
   createTaskCategory,
@@ -36,12 +40,14 @@ import {
   type ProfileAvatarIconKey,
 } from './lib/profile-icons';
 import { getSupabaseClient, isSupabaseConfigured } from './lib/supabase';
-import type { MemberName, WeeklyActivity } from './types/community';
+import type { MemberName, UserCommunitySummary, WeeklyActivity } from './types/community';
 
 type DailyOverviewRow = WeeklyActivity & { total: number };
 
 type CommunityTask = ApiCommunityTask;
 type RecentTaskLog = ApiRecentTaskLog;
+const EMPTY_TASKS: CommunityTask[] = [];
+const EMPTY_CATEGORIES: string[] = [];
 
 type ToastVariant = 'success' | 'error';
 
@@ -79,10 +85,18 @@ function App() {
   const queryClient = useQueryClient();
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [isLoginSubmitting, setIsLoginSubmitting] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [inviteToken, setInviteToken] = useState<string | null>(() => getInviteTokenFromUrl());
+  const [isAcceptingInvite, setIsAcceptingInvite] = useState(false);
+  const [inviteLinkValue, setInviteLinkValue] = useState<string | null>(null);
+  const [inviteLinkExpiresAt, setInviteLinkExpiresAt] = useState<string | null>(null);
+  const [isGeneratingInviteLink, setIsGeneratingInviteLink] = useState(false);
+  const [isInviteLinkExpanded, setIsInviteLinkExpanded] = useState(false);
+  const isInviteJoinPending = Boolean(session && inviteToken);
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -126,18 +140,23 @@ function App() {
   }, []);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['community-dashboard', session?.user.id],
-    queryFn: fetchCommunityDashboard,
-    enabled: isSupabaseConfigured && isAuthReady && Boolean(session),
+    queryKey: ['community-dashboard', session?.user.id, selectedCommunityId],
+    queryFn: () => fetchCommunityDashboard(selectedCommunityId),
+    enabled:
+      isSupabaseConfigured &&
+      isAuthReady &&
+      Boolean(session) &&
+      !isInviteJoinPending &&
+      !isAcceptingInvite,
   });
 
   const activeCommunityId = data?.communityId ?? null;
-  const { data: tasksData = [] } = useQuery({
+  const { data: tasksData = EMPTY_TASKS } = useQuery({
     queryKey: ['community-tasks', activeCommunityId],
     queryFn: () => fetchCommunityTasks(activeCommunityId ?? ''),
     enabled: isSupabaseConfigured && isAuthReady && Boolean(session) && Boolean(activeCommunityId),
   });
-  const { data: categoriesData = [] } = useQuery({
+  const { data: categoriesData = EMPTY_CATEGORIES } = useQuery({
     queryKey: ['task-categories', activeCommunityId],
     queryFn: () => fetchTaskCategories(activeCommunityId ?? ''),
     enabled: isSupabaseConfigured && isAuthReady && Boolean(session) && Boolean(activeCommunityId),
@@ -147,6 +166,12 @@ function App() {
     queryFn: () => fetchMyRecentTaskLogs(activeCommunityId ?? '', 5),
     enabled: isSupabaseConfigured && isAuthReady && Boolean(session) && Boolean(activeCommunityId),
   });
+
+  useEffect(() => {
+    setInviteLinkValue(null);
+    setInviteLinkExpiresAt(null);
+    setIsInviteLinkExpanded(false);
+  }, [activeCommunityId]);
 
   const [taskDate, setTaskDate] = useState(() => getTodayIsoDate());
   const [taskDescription, setTaskDescription] = useState('');
@@ -165,6 +190,7 @@ function App() {
   const [isMobileCreateTaskOpen, setIsMobileCreateTaskOpen] = useState(false);
   const [taskToDelete, setTaskToDelete] = useState<CommunityTask | null>(null);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [isCommunitiesMenuOpen, setIsCommunitiesMenuOpen] = useState(false);
   const [profileAliasDraft, setProfileAliasDraft] = useState('');
   const [profileIconDraft, setProfileIconDraft] = useState<ProfileAvatarIconKey>('leaf_svg');
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
@@ -173,7 +199,12 @@ function App() {
   const [isCreateCommunityOpen, setIsCreateCommunityOpen] = useState(false);
   const [isCreateCommunityConfirmOpen, setIsCreateCommunityConfirmOpen] = useState(false);
   const [isCreatingCommunity, setIsCreatingCommunity] = useState(false);
+  const [communityToDelete, setCommunityToDelete] = useState<UserCommunitySummary | null>(null);
+  const [communityDeleteConfirmName, setCommunityDeleteConfirmName] = useState('');
+  const [isDeletingCommunity, setIsDeletingCommunity] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
+  const communitiesMenuRef = useRef<HTMLDivElement | null>(null);
+  const inviteLinkPanelRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDayLabel = useMemo(() => toDayLabel(taskDate), [taskDate]);
   const todayLabel = useMemo(() => toDayLabel(getTodayIsoDate()), []);
@@ -258,6 +289,26 @@ function App() {
   const profileMember =
     data?.members.find((member) => member.userId === currentUserId) ?? data?.members[0];
   const activeMember: MemberName = profileMember?.name ?? 'Integrante';
+  const currentUserRoleKey = profileMember?.roleKey ?? 'member';
+  const roleBadge = {
+    owner: {
+      label: 'Creador',
+      className:
+        'border-sky-300/70 bg-sky-100/90 text-sky-800',
+    },
+    admin: {
+      label: 'Admin',
+      className:
+        'border-emerald-300/70 bg-emerald-100/90 text-emerald-800',
+    },
+    member: {
+      label: 'Integrante',
+      className:
+        'border-violet-300/70 bg-violet-100/90 text-violet-800',
+    },
+  }[currentUserRoleKey];
+  const canInviteToCommunity =
+    profileMember?.roleKey === 'owner' || profileMember?.roleKey === 'admin';
   const activeMemberProfile = profileMember;
 
   useEffect(() => {
@@ -270,6 +321,17 @@ function App() {
     setProfileIconDraft(nextIcon && isValidProfileIconKey(nextIcon) ? nextIcon : 'leaf_svg');
     setIsIconPickerOpen(false);
   }, [profileMember]);
+
+  useEffect(() => {
+    if (!selectedCommunityId || !data) {
+      return;
+    }
+
+    const exists = data.userCommunities.some((community) => community.id === selectedCommunityId);
+    if (!exists) {
+      setSelectedCommunityId(null);
+    }
+  }, [data, selectedCommunityId]);
 
   const todayForActiveMember = useMemo(() => {
     if (!dailyOverview.length) {
@@ -300,6 +362,8 @@ function App() {
     ? getScoreBadgeClass(selectedCommunityTask.score)
     : 'border-black/12 bg-white/70 text-ink/60';
   const createTaskScoreBadgeClass = getScoreBadgeClass(communityTaskScore);
+  const isCommunityDeleteNameMatch =
+    communityToDelete !== null && communityDeleteConfirmName.trim() === communityToDelete.name;
 
   const donutData = useMemo(() => {
     const withTasks = totalsByMember.filter((member) => member.completed > 0);
@@ -356,23 +420,45 @@ function App() {
   }, [taskCategories, communityTaskCategory]);
 
   useEffect(() => {
-    if (!isProfileMenuOpen) {
+    if (!isProfileMenuOpen && !isCommunitiesMenuOpen) {
       return;
     }
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+
+      if (isProfileMenuOpen && profileMenuRef.current && !profileMenuRef.current.contains(target)) {
         setIsProfileMenuOpen(false);
         setIsIconPickerOpen(false);
+        setIsCreateCommunityOpen(false);
+        setIsCreateCommunityConfirmOpen(false);
+      }
+
+      if (
+        isCommunitiesMenuOpen &&
+        communitiesMenuRef.current &&
+        !communitiesMenuRef.current.contains(target)
+      ) {
+        setIsCommunitiesMenuOpen(false);
         setIsCreateCommunityOpen(false);
         setIsCreateCommunityConfirmOpen(false);
       }
     };
 
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      if (isProfileMenuOpen) {
         setIsProfileMenuOpen(false);
         setIsIconPickerOpen(false);
+        setIsCreateCommunityOpen(false);
+        setIsCreateCommunityConfirmOpen(false);
+      }
+
+      if (isCommunitiesMenuOpen) {
+        setIsCommunitiesMenuOpen(false);
         setIsCreateCommunityOpen(false);
         setIsCreateCommunityConfirmOpen(false);
       }
@@ -384,7 +470,27 @@ function App() {
       window.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [isProfileMenuOpen]);
+  }, [isProfileMenuOpen, isCommunitiesMenuOpen]);
+
+  useEffect(() => {
+    if (!inviteLinkValue || !isInviteLinkExpanded) {
+      return;
+    }
+
+    const handlePointerOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node;
+      if (inviteLinkPanelRef.current && !inviteLinkPanelRef.current.contains(target)) {
+        setIsInviteLinkExpanded(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerOutside);
+    window.addEventListener('touchstart', handlePointerOutside);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerOutside);
+      window.removeEventListener('touchstart', handlePointerOutside);
+    };
+  }, [inviteLinkValue, isInviteLinkExpanded]);
 
   const showToast = (message: string, variant: ToastVariant = 'success') => {
     const id = `toast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -394,6 +500,158 @@ function App() {
     window.setTimeout(() => {
       setToasts((previous) => previous.filter((toast) => toast.id !== id));
     }, 3000);
+  };
+
+  useEffect(() => {
+    if (!isAuthReady || !session || !inviteToken) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const handleInviteJoin = async () => {
+      setIsAcceptingInvite(true);
+      try {
+        const result = await acceptCommunityInviteByToken(inviteToken);
+        if (isCancelled) {
+          return;
+        }
+
+        if (result.status === 'already_member') {
+          showToast('Ya eres parte de esta comunidad.');
+        } else if (result.status === 'reactivated') {
+          showToast(`Te reincorporaste a "${result.communityName}".`);
+        } else {
+          showToast(`Te uniste a "${result.communityName}".`);
+        }
+
+        setSelectedCommunityId(result.communityId);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['community-dashboard'] }),
+          queryClient.invalidateQueries({ queryKey: ['community-tasks'] }),
+          queryClient.invalidateQueries({ queryKey: ['task-categories'] }),
+          queryClient.invalidateQueries({ queryKey: ['my-recent-task-logs'] }),
+        ]);
+      } catch (inviteError) {
+        if (isCancelled) {
+          return;
+        }
+
+        const message =
+          inviteError instanceof Error
+            ? inviteError.message
+            : 'No se pudo procesar la invitación a la comunidad.';
+        showToast(message, 'error');
+      } finally {
+        if (isCancelled) {
+          return;
+        }
+
+        clearInviteTokenFromUrl();
+        setInviteToken(null);
+        setIsAcceptingInvite(false);
+      }
+    };
+
+    handleInviteJoin();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isAuthReady, inviteToken, queryClient, session]);
+
+  const handleGenerateCommunityInvite = async () => {
+    if (!activeCommunityId) {
+      showToast('No se encontró una comunidad activa para invitar.', 'error');
+      return;
+    }
+
+    setIsGeneratingInviteLink(true);
+    try {
+      const invite = await createCommunityInviteLink(activeCommunityId);
+      setInviteLinkValue(invite.inviteLink);
+      setInviteLinkExpiresAt(invite.expiresAt);
+      setIsInviteLinkExpanded(true);
+
+      try {
+        await navigator.clipboard.writeText(invite.inviteLink);
+        showToast('Link de invitación generado y copiado.');
+      } catch {
+        showToast('Link de invitación generado.');
+      }
+    } catch (inviteError) {
+      const message =
+        inviteError instanceof Error
+          ? inviteError.message
+          : 'No se pudo generar el link de invitación.';
+      showToast(message, 'error');
+    } finally {
+      setIsGeneratingInviteLink(false);
+    }
+  };
+
+  const handleCopyInviteLink = async () => {
+    if (!inviteLinkValue) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(inviteLinkValue);
+      showToast('Link copiado.');
+    } catch {
+      showToast('No se pudo copiar el link automáticamente.', 'error');
+    }
+  };
+
+  const handleGoToCommunity = (communityId: string) => {
+    setSelectedCommunityId(communityId);
+    setIsCommunitiesMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleOpenDeleteCommunity = (community: UserCommunitySummary) => {
+    setCommunityToDelete(community);
+    setCommunityDeleteConfirmName('');
+  };
+
+  const handleConfirmDeleteCommunity = async () => {
+    if (!communityToDelete) {
+      return;
+    }
+
+    const typedName = communityDeleteConfirmName.trim();
+    if (typedName !== communityToDelete.name) {
+      showToast('Escribe exactamente el nombre de la comunidad para confirmar.', 'error');
+      return;
+    }
+
+    setIsDeletingCommunity(true);
+    try {
+      const deletingCommunity = communityToDelete;
+      await deleteCommunity(deletingCommunity.id);
+
+      if (deletingCommunity.id === activeCommunityId) {
+        setSelectedCommunityId(null);
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['community-dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['community-tasks'] }),
+        queryClient.invalidateQueries({ queryKey: ['task-categories'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-recent-task-logs'] }),
+      ]);
+
+      setCommunityToDelete(null);
+      setCommunityDeleteConfirmName('');
+      setIsCommunitiesMenuOpen(false);
+      showToast(`Comunidad eliminada: "${deletingCommunity.name}".`);
+    } catch (deleteError) {
+      const message =
+        deleteError instanceof Error ? deleteError.message : 'No se pudo eliminar la comunidad.';
+      showToast(message, 'error');
+    } finally {
+      setIsDeletingCommunity(false);
+    }
   };
 
   const handleProfileSave = async (event: FormEvent<HTMLFormElement>) => {
@@ -460,13 +718,16 @@ function App() {
     setIsCreatingCommunity(true);
     try {
       const created = await createCommunity(communityName);
+      setSelectedCommunityId(created.id);
       setNewCommunityName('');
       setIsCreateCommunityOpen(false);
       setIsCreateCommunityConfirmOpen(false);
+      setIsCommunitiesMenuOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['community-dashboard'] }),
         queryClient.invalidateQueries({ queryKey: ['community-tasks'] }),
         queryClient.invalidateQueries({ queryKey: ['task-categories'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-recent-task-logs'] }),
       ]);
       showToast(`Comunidad creada: "${created.name}".`);
     } catch (creationError) {
@@ -527,11 +788,18 @@ function App() {
 
     setFormMessage(null);
     setTaskDescription('');
+    setSelectedCommunityId(null);
+    setIsCommunitiesMenuOpen(false);
     setIsProfileMenuOpen(false);
     setIsIconPickerOpen(false);
     setNewCommunityName('');
+    setInviteLinkValue(null);
+    setInviteLinkExpiresAt(null);
+    setIsInviteLinkExpanded(false);
     setIsCreateCommunityOpen(false);
     setIsCreateCommunityConfirmOpen(false);
+    setCommunityToDelete(null);
+    setCommunityDeleteConfirmName('');
     await queryClient.invalidateQueries({ queryKey: ['community-dashboard'] });
   };
 
@@ -761,6 +1029,11 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   <p>2. La app carga tu comunidad activa automáticamente.</p>
                   <p>3. Desde ahí ya puedes registrar tareas y puntos.</p>
                 </div>
+                {inviteToken && (
+                  <p className="mt-4 max-w-lg rounded-xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                    Tienes una invitación pendiente. Inicia sesión y te uniremos automáticamente.
+                  </p>
+                )}
               </article>
 
               <form
@@ -809,6 +1082,24 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                 </button>
               </form>
             </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (session && (isInviteJoinPending || isAcceptingInvite)) {
+    return (
+      <div className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8">
+        <div className="bg-orb-1" aria-hidden />
+        <div className="bg-orb-2" aria-hidden />
+        <main className="relative z-10 mx-auto flex w-full max-w-3xl flex-col gap-6">
+          <section className="panel p-8 text-center sm:p-12">
+            <p className="text-xs uppercase tracking-[0.18em] text-ink/58">Invitación</p>
+            <h1 className="mt-2 font-heading text-4xl text-ink">Conectando a la comunidad</h1>
+            <p className="mt-3 text-sm text-ink/68">
+              Estamos validando tu invitación y activando tu acceso.
+            </p>
           </section>
         </main>
       </div>
@@ -890,23 +1181,167 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
           className="panel sticky top-3 z-40 animate-rise p-3 sm:p-6 lg:static"
         >
           <div className="flex flex-wrap items-start justify-between gap-3 sm:items-center">
-            <button
-              id="btn-mis-comunidades"
-              type="button"
-              className="group inline-flex w-full items-center gap-3 rounded-2xl border border-amber-800/20 bg-gradient-to-br from-amber-50/95 to-orange-100/80 px-3.5 py-2.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-800/35 hover:shadow-md sm:w-auto sm:px-4 sm:py-3"
-            >
-              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-700/90 text-white sm:h-9 sm:w-9">
-                <svg viewBox="0 0 24 24" className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden>
-                  <path
-                    fill="currentColor"
-                    d="M12 3a4 4 0 1 1 0 8a4 4 0 0 1 0-8m-7 3a3 3 0 1 1 0 6a3 3 0 0 1 0-6m14 0a3 3 0 1 1 0 6a3 3 0 0 1 0-6m-7 7c3.22 0 5.95 1.57 7.02 3.75A1 1 0 0 1 18.13 18H5.87a1 1 0 0 1-.9-1.25C6.05 14.57 8.78 13 12 13m-7 .5c.84 0 1.63.14 2.34.4a8.3 8.3 0 0 0-2.13 3.1H2.5a1 1 0 0 1-.9-1.43C2.3 14.32 3.58 13.5 5 13.5m14 0c1.42 0 2.7.82 3.4 2.07A1 1 0 0 1 21.5 17h-2.71a8.3 8.3 0 0 0-2.13-3.1c.71-.26 1.5-.4 2.34-.4"
-                  />
-                </svg>
-              </span>
-              <span className="leading-tight">
-                <span className="font-heading text-lg text-amber-950/90 sm:text-xl">Mis Comunidades</span>
-              </span>
-            </button>
+            <div ref={communitiesMenuRef} className="relative w-full sm:w-auto">
+              <button
+                id="btn-mis-comunidades"
+                type="button"
+                onClick={() => {
+                  setIsCommunitiesMenuOpen((previous) => {
+                    const next = !previous;
+                    if (!next) {
+                      setIsCreateCommunityOpen(false);
+                      setIsCreateCommunityConfirmOpen(false);
+                    }
+                    return next;
+                  });
+                  if (isProfileMenuOpen) {
+                    setIsProfileMenuOpen(false);
+                    setIsIconPickerOpen(false);
+                    setIsCreateCommunityOpen(false);
+                    setIsCreateCommunityConfirmOpen(false);
+                  }
+                }}
+                className="group inline-flex w-full items-center gap-3 rounded-2xl border border-amber-800/20 bg-gradient-to-br from-amber-50/95 to-orange-100/80 px-3.5 py-2.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-800/35 hover:shadow-md sm:w-auto sm:px-4 sm:py-3"
+                aria-expanded={isCommunitiesMenuOpen}
+                aria-controls="mis-comunidades-menu"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-700/90 text-white sm:h-9 sm:w-9">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden>
+                    <path
+                      fill="currentColor"
+                      d="M12 3a4 4 0 1 1 0 8a4 4 0 0 1 0-8m-7 3a3 3 0 1 1 0 6a3 3 0 0 1 0-6m14 0a3 3 0 1 1 0 6a3 3 0 0 1 0-6m-7 7c3.22 0 5.95 1.57 7.02 3.75A1 1 0 0 1 18.13 18H5.87a1 1 0 0 1-.9-1.25C6.05 14.57 8.78 13 12 13m-7 .5c.84 0 1.63.14 2.34.4a8.3 8.3 0 0 0-2.13 3.1H2.5a1 1 0 0 1-.9-1.43C2.3 14.32 3.58 13.5 5 13.5m14 0c1.42 0 2.7.82 3.4 2.07A1 1 0 0 1 21.5 17h-2.71a8.3 8.3 0 0 0-2.13-3.1c.71-.26 1.5-.4 2.34-.4"
+                    />
+                  </svg>
+                </span>
+                <span className="leading-tight">
+                  <span className="font-heading text-lg text-amber-950/90 sm:text-xl">
+                    Mis Comunidades
+                  </span>
+                </span>
+              </button>
+
+              {isCommunitiesMenuOpen && (
+                <div
+                  id="mis-comunidades-menu"
+                  className="absolute left-0 top-[calc(100%+0.55rem)] z-[70] w-[min(95vw,420px)] rounded-2xl border border-black/12 bg-[color:var(--card)] p-3 shadow-xl backdrop-blur-sm sm:p-4"
+                >
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/58">
+                    Comunidades del usuario
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {(data?.userCommunities ?? []).length === 0 && (
+                      <p className="rounded-xl border border-black/10 bg-white/75 px-3 py-2 text-sm text-ink/65">
+                        No hay comunidades para mostrar.
+                      </p>
+                    )}
+                    {(data?.userCommunities ?? []).map((community) => {
+                      const isCommunityActive = community.id === activeCommunityId;
+                      const isOwnerCommunity = community.roleKey === 'owner';
+
+                      return (
+                        <div
+                          key={community.id}
+                          className="flex items-center gap-2 rounded-xl border border-black/10 bg-white/80 px-2 py-1.5 transition hover:border-black/20 hover:bg-white"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleGoToCommunity(community.id)}
+                            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-1.5 py-1 text-left"
+                            aria-label={`Ir a la comunidad ${community.name}`}
+                          >
+                            <p className="min-w-0 truncate text-sm font-semibold text-ink/85">
+                              {community.name}
+                            </p>
+                            {isCommunityActive && (
+                              <span className="rounded-full border border-lime-300 bg-lime-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-lime-800">
+                                activa
+                              </span>
+                            )}
+                          </button>
+                          {isOwnerCommunity && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDeleteCommunity(community)}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-red-300 bg-red-50 text-sm font-semibold leading-none text-red-700 transition hover:border-red-400 hover:bg-red-100"
+                              aria-label={`Eliminar comunidad ${community.name}`}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <section className="mt-3 p-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreateCommunityOpen((previous) => {
+                          const next = !previous;
+                          if (!next) {
+                            setIsCreateCommunityConfirmOpen(false);
+                          }
+                          return next;
+                        });
+                      }}
+                      className="mx-auto flex h-7 min-w-[170px] items-center justify-center rounded-full border border-amber-800/25 bg-amber-50/90 px-3 text-[10px] font-semibold uppercase tracking-[0.09em] text-amber-900 transition hover:border-amber-800/45 hover:bg-amber-100"
+                    >
+                      Crear comunidad
+                    </button>
+
+                    {isCreateCommunityOpen && (
+                      <form onSubmit={handlePrepareCreateCommunity} className="mt-2 space-y-2">
+                        <input
+                          type="text"
+                          value={newCommunityName}
+                          onChange={(event) => {
+                            setNewCommunityName(event.target.value);
+                            setIsCreateCommunityConfirmOpen(false);
+                          }}
+                          maxLength={64}
+                          placeholder="Ej: Departamento Centro"
+                          className="w-full rounded-xl border border-black/12 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
+                        />
+
+                        {!isCreateCommunityConfirmOpen && (
+                          <button
+                            type="submit"
+                            className="btn-primary inline-flex w-full items-center justify-center px-3 py-2 text-xs uppercase tracking-[0.08em]"
+                          >
+                            Continuar
+                          </button>
+                        )}
+
+                        {isCreateCommunityConfirmOpen && (
+                          <div className="rounded-xl border border-amber-700/25 bg-amber-50/90 p-3">
+                            <p className="text-xs text-ink/70">
+                              ¿Confirmas crear la comunidad <strong>{newCommunityName.trim()}</strong>?
+                            </p>
+                            <div className="mt-2 flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setIsCreateCommunityConfirmOpen(false)}
+                                className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70 transition hover:border-black/30"
+                              >
+                                Volver
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleConfirmCreateCommunity}
+                                disabled={isCreatingCommunity}
+                                className="btn-primary px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] disabled:cursor-not-allowed disabled:opacity-70"
+                              >
+                                {isCreatingCommunity ? 'Creando...' : 'Confirmar creación'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </form>
+                    )}
+                  </section>
+                </div>
+              )}
+            </div>
             <div ref={profileMenuRef} className="relative ml-auto flex items-center gap-2">
               <button
                 type="button"
@@ -922,6 +1357,10 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   setIsProfileMenuOpen((previous) => {
                     if (previous) {
                       setIsIconPickerOpen(false);
+                      setIsCreateCommunityOpen(false);
+                      setIsCreateCommunityConfirmOpen(false);
+                    } else {
+                      setIsCommunitiesMenuOpen(false);
                       setIsCreateCommunityOpen(false);
                       setIsCreateCommunityConfirmOpen(false);
                     }
@@ -1006,81 +1445,6 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
                   </form>
 
-                  <section className="mt-4 rounded-xl border border-black/10 bg-white/70 p-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsCreateCommunityOpen((previous) => {
-                          const next = !previous;
-                          if (!next) {
-                            setIsCreateCommunityConfirmOpen(false);
-                          }
-                          return next;
-                        });
-                      }}
-                      className="relative mx-auto inline-flex h-7 items-center justify-center rounded-md px-2 py-0 text-center transition hover:bg-white/45"
-                    >
-                      <span className="block text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/72">
-                        Crear comunidad
-                      </span>
-                      {isCreateCommunityOpen && (
-                        <span className="absolute right-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-ink/65">
-                          Ocultar
-                        </span>
-                      )}
-                    </button>
-
-                    {isCreateCommunityOpen && (
-                      <form onSubmit={handlePrepareCreateCommunity} className="mt-2 space-y-2">
-                        <input
-                          type="text"
-                          value={newCommunityName}
-                          onChange={(event) => {
-                            setNewCommunityName(event.target.value);
-                            setIsCreateCommunityConfirmOpen(false);
-                          }}
-                          maxLength={64}
-                          placeholder="Ej: Departamento Centro"
-                          className="w-full rounded-xl border border-black/12 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
-                        />
-
-                        {!isCreateCommunityConfirmOpen && (
-                          <button
-                            type="submit"
-                            className="btn-primary inline-flex w-full items-center justify-center px-3 py-2 text-xs uppercase tracking-[0.08em]"
-                          >
-                            Continuar
-                          </button>
-                        )}
-
-                        {isCreateCommunityConfirmOpen && (
-                          <div className="rounded-xl border border-amber-700/25 bg-amber-50/90 p-3">
-                            <p className="text-xs text-ink/70">
-                              ¿Confirmas crear la comunidad <strong>{newCommunityName.trim()}</strong>?
-                            </p>
-                            <div className="mt-2 flex items-center justify-end gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setIsCreateCommunityConfirmOpen(false)}
-                                className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70 transition hover:border-black/30"
-                              >
-                                Volver
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleConfirmCreateCommunity}
-                                disabled={isCreatingCommunity}
-                                className="btn-primary px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] disabled:cursor-not-allowed disabled:opacity-70"
-                              >
-                                {isCreatingCommunity ? 'Creando...' : 'Confirmar creación'}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </form>
-                    )}
-                  </section>
-
                   <div className="mt-4 flex items-center justify-center">
                     <button
                       type="submit"
@@ -1098,19 +1462,91 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
         </header>
 
         <section id="comunidad" className="panel animate-rise p-4 [animation-delay:90ms] sm:p-8">
-          <p className="text-xs uppercase tracking-[0.18em] text-ink/60">Comunidad</p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-ink/60">Comunidad</p>
+            <span
+              className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.09em] ${roleBadge.className}`}
+            >
+              {roleBadge.label}
+            </span>
+          </div>
           <h1 className="font-heading text-3xl leading-tight text-ink sm:text-5xl">
             {data?.communityName ?? 'Cargando comunidad...'}
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-ink/70 sm:text-base">
             Vista general de tareas del hogar, integrantes activos y progreso semanal.
           </p>
-          {data?.presenceToday && (
-            <p className="mt-2 text-xs uppercase tracking-[0.11em] text-ink/58">
-              Presentes hoy: {data.presenceToday.presentCount} / {data.presenceToday.activeMembersCount}{' '}
-              ({data.presenceToday.awayCount} ausente/s)
-            </p>
-          )}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {canInviteToCommunity && (
+              <button
+                type="button"
+                onClick={handleGenerateCommunityInvite}
+                disabled={isGeneratingInviteLink}
+                className="inline-flex items-center rounded-full border border-amber-800/25 bg-amber-50/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.09em] text-amber-900 transition hover:border-amber-800/45 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-65"
+              >
+                {isGeneratingInviteLink ? 'Generando link...' : 'Invitar a la Comunidad'}
+              </button>
+            )}
+            {inviteLinkValue && (
+              <div
+                ref={inviteLinkPanelRef}
+                className="w-full rounded-xl border border-sky-200 bg-sky-50/85 p-3"
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsInviteLinkExpanded((previous) => !previous)}
+                  aria-expanded={isInviteLinkExpanded}
+                  className="flex w-full items-center justify-between gap-2 text-left"
+                >
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-sky-800">
+                    Link de invitación
+                  </p>
+                  <span
+                    className={`inline-flex h-5 w-5 items-center justify-center rounded-full border border-sky-300 bg-white text-sky-700 transition ${
+                      isInviteLinkExpanded ? 'rotate-180' : ''
+                    }`}
+                    aria-hidden
+                  >
+                    <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
+                      <path
+                        fill="currentColor"
+                        d="m5.5 7.5 4.5 5 4.5-5"
+                        stroke="currentColor"
+                        strokeWidth="1.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                </button>
+
+                {isInviteLinkExpanded && (
+                  <>
+                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                      <input
+                        type="text"
+                        readOnly
+                        value={inviteLinkValue}
+                        className="w-full rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs text-sky-900 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCopyInviteLink}
+                        className="rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-800 transition hover:border-sky-500 hover:bg-sky-100"
+                      >
+                        Copiar
+                      </button>
+                    </div>
+                    {inviteLinkExpiresAt && (
+                      <p className="mt-2 text-[11px] text-sky-800/90">
+                        Expira: {formatDateTimeLabel(inviteLinkExpiresAt)}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </section>
 
         <section
@@ -1914,6 +2350,70 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
         </div>
       )}
 
+      {communityToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/35"
+            onClick={() => {
+              if (isDeletingCommunity) {
+                return;
+              }
+              setCommunityToDelete(null);
+              setCommunityDeleteConfirmName('');
+            }}
+            aria-label="Cerrar confirmación de eliminación de comunidad"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-community-title"
+            className="relative w-full max-w-md rounded-2xl border border-black/15 bg-[color:var(--card)] p-5 shadow-xl"
+          >
+            <p className="text-[11px] uppercase tracking-[0.14em] text-ink/60">Confirmación</p>
+            <h3 id="delete-community-title" className="mt-1 font-heading text-2xl text-ink">
+              Eliminar comunidad
+            </h3>
+            <p className="mt-2 text-sm text-ink/70">
+              Esta acción eliminará la comunidad <strong>{communityToDelete.name}</strong> y todos sus
+              datos asociados.
+            </p>
+            <p className="mt-3 text-xs text-ink/70">
+              Escribe el nombre exacto para confirmar:
+              <strong> {communityToDelete.name}</strong>
+            </p>
+            <input
+              type="text"
+              value={communityDeleteConfirmName}
+              onChange={(event) => setCommunityDeleteConfirmName(event.target.value)}
+              placeholder={communityToDelete.name}
+              className="mt-2 w-full rounded-xl border border-black/12 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
+            />
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setCommunityToDelete(null);
+                  setCommunityDeleteConfirmName('');
+                }}
+                disabled={isDeletingCommunity}
+                className="w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm font-medium text-ink/80 transition hover:border-black/30 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteCommunity}
+                disabled={!isCommunityDeleteNameMatch || isDeletingCommunity}
+                className="w-full rounded-lg border border-red-300 bg-red-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+              >
+                {isDeletingCommunity ? 'Eliminando...' : 'Eliminar comunidad'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {taskToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <button
@@ -1984,6 +2484,38 @@ function formatDateLabel(dateValue: string): string {
     day: '2-digit',
     month: 'short',
   }).format(parsed);
+}
+
+function formatDateTimeLabel(dateValue: string): string {
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) {
+    return dateValue;
+  }
+
+  return new Intl.DateTimeFormat('es-CL', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed);
+}
+
+function getInviteTokenFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('invite')?.trim();
+  return token || null;
+}
+
+function clearInviteTokenFromUrl(): void {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('invite')) {
+    return;
+  }
+
+  params.delete('invite');
+  const nextSearch = params.toString();
+  const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+  window.history.replaceState({}, '', nextUrl);
 }
 
 function getRecentLogMomentLabel(dateValue: string): string {

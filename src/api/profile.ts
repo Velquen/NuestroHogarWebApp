@@ -58,17 +58,32 @@ export async function createCommunity(name: string): Promise<{ id: string; name:
   }
 
   const { data, error } = await supabase
-    .from('communities')
-    .insert({
-      name: communityName,
-      created_by: user.id,
+    .rpc('rpc_create_community', {
+      p_name: communityName,
     })
-    .select('id, name')
     .single();
 
   if (error) {
     throw new Error(`No se pudo crear la comunidad: ${error.message}`);
   }
 
-  return data;
+  return {
+    id: String((data as { id: string; name: string }).id),
+    name: String((data as { id: string; name: string }).name),
+  };
+}
+
+export async function deleteCommunity(communityId: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  const normalizedCommunityId = communityId.trim();
+
+  if (!normalizedCommunityId) {
+    throw new Error('No se encontró una comunidad para eliminar.');
+  }
+
+  const { error } = await supabase.from('communities').delete().eq('id', normalizedCommunityId);
+
+  if (error) {
+    throw new Error(`No se pudo eliminar la comunidad: ${error.message}`);
+  }
 }

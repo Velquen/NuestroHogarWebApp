@@ -21,6 +21,73 @@
   box-sizing: border-box;
 }
 
+/* Cursor policy:
+   - Pointer only on interactive/selectable controls.
+   - Normal cursor elsewhere.
+   - Text cursor only while writing. */
+a[href],
+button,
+[role='button'],
+summary,
+label[for],
+select,
+input[type='button'],
+input[type='submit'],
+input[type='reset'],
+input[type='checkbox'],
+input[type='radio'],
+input[type='file'],
+input[type='range'],
+input[type='color'] {
+  cursor: pointer;
+}
+
+a[href] *,
+button *,
+[role='button'] *,
+summary * {
+  cursor: pointer;
+}
+
+input[type='text'],
+input[type='search'],
+input[type='email'],
+input[type='password'],
+input[type='number'],
+input[type='tel'],
+input[type='url'],
+input[type='date'],
+input[type='datetime-local'],
+input[type='month'],
+input[type='week'],
+input[type='time'],
+textarea,
+[contenteditable='true'],
+[contenteditable='plaintext-only'],
+[contenteditable]:not([contenteditable='false']) {
+  cursor: text;
+}
+
+[draggable='true'],
+[data-dnd-zone],
+[data-dnd-item],
+.dnd-zone,
+.dnd-section {
+  cursor: grab;
+}
+
+[draggable='true']:active,
+[data-dnd-item]:active,
+.dnd-zone:active,
+.dnd-section:active {
+  cursor: grabbing;
+}
+
+:disabled,
+[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
