@@ -1,4 +1,14 @@
-import { type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -40,16 +50,22 @@ import {
   type ProfileAvatarIconKey,
 } from './lib/profile-icons';
 import { getSupabaseClient, isSupabaseConfigured } from './lib/supabase';
-import type { MemberName, UserCommunitySummary, WeeklyActivity } from './types/community';
+import type { ActivityRange, MemberName, UserCommunitySummary, WeeklyActivity } from './types/community';
 
-type DailyOverviewRow = WeeklyActivity & { total: number };
+type DailyOverviewRow = WeeklyActivity & { total: number; totalPoints: number; mobileDayLabel: string };
 
 type CommunityTask = ApiCommunityTask;
 type RecentTaskLog = ApiRecentTaskLog;
 const EMPTY_TASKS: CommunityTask[] = [];
 const EMPTY_CATEGORIES: string[] = [];
+const activityRangeOptions: { value: ActivityRange; label: string }[] = [
+  { value: 'week', label: 'Semana' },
+  { value: 'month', label: 'Mes' },
+];
+const THEME_STORAGE_KEY = 'nuestrohogar:theme-mode:v1';
 
 type ToastVariant = 'success' | 'error';
+type ThemeMode = 'light' | 'dark' | 'system';
 
 interface AppToast {
   id: string;
@@ -64,7 +80,53 @@ interface RecentLogTone {
   soft: string;
 }
 
+interface TaskDropdownOption {
+  value: string;
+  label: string;
+  hint?: string;
+  chip?: string;
+  disabled?: boolean;
+}
+
+interface TaskDropdownProps {
+  ariaLabel: string;
+  disabled?: boolean;
+  emptyLabel?: string;
+  icon: ReactNode;
+  onChange: (value: string) => void;
+  options: TaskDropdownOption[];
+  placeholder: string;
+  selectedChip?: ReactNode;
+  value: string;
+  variant?: 'default' | 'score';
+}
+
 type AuthMode = 'sign-in' | 'sign-up';
+
+function isThemeMode(value: string | null): value is ThemeMode {
+  return value === 'light' || value === 'dark' || value === 'system';
+}
+
+function getInitialThemeMode(): ThemeMode {
+  if (typeof window === 'undefined') {
+    return 'system';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return isThemeMode(raw) ? raw : 'system';
+  } catch {
+    return 'system';
+  }
+}
+
+function getSystemPrefersDark(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
 
 const weekdayMap: Record<string, string> = {
   lunes: 'Lunes',
@@ -82,6 +144,19 @@ const getScoreBadgeClass = (score: number) =>
     : score <= 5
       ? 'border-orange-200 bg-orange-100 text-orange-800'
       : 'border-lime-200 bg-lime-100 text-lime-800';
+
+function getPointsKey(memberName: string): string {
+  return `${memberName}__points`;
+}
+
+function toMobileDayLabel(metricDate: string): string {
+  const [year, month, day] = metricDate.split('-').map(Number);
+  if (!year || !month || !day) {
+    return metricDate;
+  }
+
+  return `${day}-${month}`;
+}
 
 function getFriendlyAuthErrorMessage(authError: unknown, authMode: AuthMode) {
   const fallbackMessage =
@@ -111,11 +186,359 @@ function getFriendlyAuthErrorMessage(authError: unknown, authMode: AuthMode) {
   return rawMessage;
 }
 
+function getEnabledOptionIndex(
+  options: TaskDropdownOption[],
+  startIndex: number,
+  direction: 1 | -1,
+): number {
+  if (options.length === 0) {
+    return -1;
+  }
+
+  let nextIndex = startIndex;
+  for (let step = 0; step < options.length; step += 1) {
+    nextIndex = (nextIndex + direction + options.length) % options.length;
+    if (!options[nextIndex]?.disabled) {
+      return nextIndex;
+    }
+  }
+
+  return -1;
+}
+
+function TaskDropdown({
+  ariaLabel,
+  disabled = false,
+  emptyLabel = 'Sin opciones disponibles',
+  icon,
+  onChange,
+  options,
+  placeholder,
+  selectedChip,
+  value,
+  variant = 'default',
+}: TaskDropdownProps) {
+  const dropdownId = useId();
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+
+  const selectedIndex = options.findIndex((option) => option.value === value && !option.disabled);
+  const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : null;
+  const firstEnabledIndex = useMemo(
+    () => options.findIndex((option) => !option.disabled),
+    [options],
+  );
+  const lastEnabledIndex = useMemo(() => {
+    for (let index = options.length - 1; index >= 0; index -= 1) {
+      if (!options[index]?.disabled) {
+        return index;
+      }
+    }
+    return -1;
+  }, [options]);
+  const isDisabled = disabled || firstEnabledIndex === -1;
+
+  useEffect(() => {
+    if (isDisabled && isOpen) {
+      setIsOpen(false);
+      setActiveIndex(-1);
+    }
+  }, [isDisabled, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+        setActiveIndex(-1);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || activeIndex < 0) {
+      return;
+    }
+
+    const optionNode = optionRefs.current[activeIndex];
+    if (!optionNode) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      optionNode.focus({ preventScroll: true });
+      optionNode.scrollIntoView({ block: 'nearest' });
+    });
+  }, [activeIndex, isOpen]);
+
+  const closeDropdown = () => {
+    setIsOpen(false);
+    setActiveIndex(-1);
+  };
+
+  const focusTrigger = () => {
+    window.requestAnimationFrame(() => {
+      triggerRef.current?.focus();
+    });
+  };
+
+  const openDropdown = (preferredIndex?: number) => {
+    if (isDisabled) {
+      return;
+    }
+
+    const fallbackIndex = selectedIndex >= 0 ? selectedIndex : firstEnabledIndex;
+    const nextIndex =
+      preferredIndex !== undefined && preferredIndex >= 0 ? preferredIndex : fallbackIndex;
+
+    setActiveIndex(nextIndex);
+    setIsOpen(true);
+  };
+
+  const commitSelection = (index: number) => {
+    const nextOption = options[index];
+    if (!nextOption || nextOption.disabled) {
+      return;
+    }
+
+    onChange(nextOption.value);
+    closeDropdown();
+    focusTrigger();
+  };
+
+  const moveActive = (direction: 1 | -1) => {
+    if (firstEnabledIndex === -1) {
+      return;
+    }
+
+    const baseIndex =
+      activeIndex >= 0
+        ? activeIndex
+        : selectedIndex >= 0
+          ? selectedIndex
+          : direction === 1
+            ? lastEnabledIndex
+            : firstEnabledIndex;
+    const nextIndex = getEnabledOptionIndex(options, baseIndex, direction);
+
+    if (nextIndex >= 0) {
+      setActiveIndex(nextIndex);
+    }
+  };
+
+  const handleTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (isDisabled) {
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      openDropdown(selectedIndex >= 0 ? selectedIndex : firstEnabledIndex);
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      openDropdown(selectedIndex >= 0 ? selectedIndex : lastEnabledIndex);
+      return;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (isOpen) {
+        closeDropdown();
+      } else {
+        openDropdown();
+      }
+      return;
+    }
+
+    if (event.key === 'Home') {
+      event.preventDefault();
+      openDropdown(firstEnabledIndex);
+      return;
+    }
+
+    if (event.key === 'End') {
+      event.preventDefault();
+      openDropdown(lastEnabledIndex);
+    }
+  };
+
+  const handleOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveActive(1);
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveActive(-1);
+      return;
+    }
+
+    if (event.key === 'Home') {
+      event.preventDefault();
+      setActiveIndex(firstEnabledIndex);
+      return;
+    }
+
+    if (event.key === 'End') {
+      event.preventDefault();
+      setActiveIndex(lastEnabledIndex);
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeDropdown();
+      focusTrigger();
+      return;
+    }
+
+    if (event.key === 'Tab') {
+      closeDropdown();
+      return;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      commitSelection(index);
+    }
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className={`task-field-shell task-dropdown-shell ${isOpen ? 'is-open' : ''} ${isDisabled ? 'is-disabled' : ''}`}
+    >
+      <span className={`task-field-icon ${isOpen ? 'is-awake' : ''}`} aria-hidden>
+        {icon}
+      </span>
+
+      <div className="task-dropdown">
+        <button
+          ref={triggerRef}
+          type="button"
+          disabled={isDisabled}
+          className={`task-field-trigger ${variant === 'score' ? 'task-field-trigger-score' : ''}`}
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-controls={`${dropdownId}-listbox`}
+          aria-expanded={isOpen}
+          onClick={() => {
+            if (isOpen) {
+              closeDropdown();
+            } else {
+              openDropdown();
+            }
+          }}
+          onKeyDown={handleTriggerKeyDown}
+        >
+          <span className="task-field-trigger-copy">
+            <span className={`task-field-value ${variant === 'score' ? 'task-field-value-score' : ''}`}>
+              {selectedOption?.label ?? placeholder}
+            </span>
+            <span className="task-field-subvalue">
+              {selectedOption?.hint ?? (isDisabled ? emptyLabel : 'Pulsa para desplegar')}
+            </span>
+          </span>
+
+          <span className="task-field-trigger-side">
+            {selectedChip}
+            <span className={`task-field-caret ${isOpen ? 'is-open' : ''}`} aria-hidden>
+              <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
+                <path
+                  fill="currentColor"
+                  d="m5.5 7.5 4.5 5 4.5-5"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+          </span>
+        </button>
+
+        {isOpen && (
+          <div className="task-dropdown-panel">
+            <div className="task-dropdown-panel-glow" aria-hidden />
+            <div className="task-dropdown-panel-shell">
+              <div
+                id={`${dropdownId}-listbox`}
+                role="listbox"
+                aria-label={ariaLabel}
+                className="task-dropdown-list"
+              >
+                {options.map((option, index) => {
+                  const isSelected = option.value === value;
+                  const isActive = activeIndex === index;
+
+                  return (
+                    <button
+                      key={`${option.value}-${index}`}
+                      ref={(node) => {
+                        optionRefs.current[index] = node;
+                      }}
+                      type="button"
+                      role="option"
+                      disabled={option.disabled}
+                      aria-selected={isSelected}
+                      className={`task-dropdown-option ${isSelected ? 'is-selected' : ''} ${isActive ? 'is-active' : ''}`}
+                      style={{ animationDelay: `${index * 28}ms` }}
+                      onClick={() => commitSelection(index)}
+                      onMouseEnter={() => setActiveIndex(index)}
+                      onFocus={() => setActiveIndex(index)}
+                      onKeyDown={(event) => handleOptionKeyDown(event, index)}
+                    >
+                      <span className="task-dropdown-option-copy">
+                        <span className="task-dropdown-option-label">{option.label}</span>
+                        {option.hint && (
+                          <span className="task-dropdown-option-hint">{option.hint}</span>
+                        )}
+                      </span>
+
+                      {option.chip && <span className="task-dropdown-option-chip">{option.chip}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const queryClient = useQueryClient();
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
+  const [activityRange, setActivityRange] = useState<ActivityRange>('week');
+  const [barHoverMetric, setBarHoverMetric] = useState<'points' | 'tasks'>('points');
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => getInitialThemeMode());
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => getSystemPrefersDark());
+  const [isMobileViewport, setIsMobileViewport] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 640 : false,
+  );
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authMode, setAuthMode] = useState<AuthMode>('sign-in');
@@ -172,9 +595,108 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 639px)');
+    const handleChange = () => setIsMobileViewport(mediaQuery.matches);
+
+    handleChange();
+    mediaQuery.addEventListener('change', handleChange);
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
+    };
+  }, []);
+
+  const resolvedTheme = useMemo<'light' | 'dark'>(
+    () => (themeMode === 'system' ? (systemPrefersDark ? 'dark' : 'light') : themeMode),
+    [themeMode, systemPrefersDark],
+  );
+
+  const handleThemeSwitch = () => {
+    setThemeMode((previous) => {
+      if (previous === 'system') {
+        return systemPrefersDark ? 'light' : 'dark';
+      }
+
+      return previous === 'dark' ? 'light' : 'dark';
+    });
+  };
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    document.documentElement.classList.toggle('dark', resolvedTheme === 'dark');
+  }, [resolvedTheme]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+    } catch {
+      // Ignora fallos de persistencia (modo privado/cuota).
+    }
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== THEME_STORAGE_KEY) {
+        return;
+      }
+
+      if (event.newValue === null) {
+        setThemeMode('system');
+        return;
+      }
+
+      if (isThemeMode(event.newValue)) {
+        setThemeMode(event.newValue);
+        return;
+      }
+
+      setThemeMode('system');
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      themeMode !== 'system' ||
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !== 'function'
+    ) {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = () => setSystemPrefersDark(mediaQuery.matches);
+
+    handleChange();
+    mediaQuery.addEventListener('change', handleChange);
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
+    };
+  }, [themeMode]);
+
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['community-dashboard', session?.user.id, selectedCommunityId],
-    queryFn: () => fetchCommunityDashboard(selectedCommunityId),
+    queryKey: ['community-dashboard', session?.user.id, selectedCommunityId, activityRange],
+    queryFn: () => fetchCommunityDashboard(selectedCommunityId, activityRange),
     enabled:
       isSupabaseConfigured &&
       isAuthReady &&
@@ -199,6 +721,56 @@ function App() {
     queryFn: () => fetchMyRecentTaskLogs(activeCommunityId ?? '', 5),
     enabled: isSupabaseConfigured && isAuthReady && Boolean(session) && Boolean(activeCommunityId),
   });
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !isAuthReady || !session || !activeCommunityId) {
+      return;
+    }
+
+    const supabase = getSupabaseClient();
+    let isDisposed = false;
+    let invalidateTimer: number | undefined;
+
+    const scheduleRefresh = () => {
+      if (isDisposed) {
+        return;
+      }
+
+      window.clearTimeout(invalidateTimer);
+      invalidateTimer = window.setTimeout(() => {
+        if (isDisposed) {
+          return;
+        }
+
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['community-dashboard'] }),
+          queryClient.invalidateQueries({
+            queryKey: ['my-recent-task-logs'],
+          }),
+        ]);
+      }, 150);
+    };
+
+    const channel = supabase
+      .channel(`community-task-logs:${activeCommunityId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'task_logs',
+          filter: `community_id=eq.${activeCommunityId}`,
+        },
+        scheduleRefresh,
+      )
+      .subscribe();
+
+    return () => {
+      isDisposed = true;
+      window.clearTimeout(invalidateTimer);
+      void supabase.removeChannel(channel);
+    };
+  }, [activeCommunityId, isAuthReady, queryClient, session]);
 
   useEffect(() => {
     setInviteLinkValue(null);
@@ -239,8 +811,7 @@ function App() {
   const communitiesMenuRef = useRef<HTMLDivElement | null>(null);
   const inviteLinkPanelRef = useRef<HTMLDivElement | null>(null);
 
-  const selectedDayLabel = useMemo(() => toDayLabel(taskDate), [taskDate]);
-  const todayLabel = useMemo(() => toDayLabel(getTodayIsoDate()), []);
+  const selectedDayLabel = useMemo(() => toDayWithMonthNumberLabel(taskDate), [taskDate]);
   const todayIsoDate = useMemo(() => getTodayIsoDate(), []);
 
   const weeklyActivities = useMemo<WeeklyActivity[]>(() => {
@@ -248,7 +819,21 @@ function App() {
       return [];
     }
 
-    return data.weeklyActivities.map((day) => ({ ...day }));
+    return data.weeklyActivities.map((day) => {
+      const normalized: WeeklyActivity = { ...day };
+
+      for (const member of data.members) {
+        const tasks = Number(normalized[member.name] ?? 0);
+        normalized[member.name] = tasks;
+
+        const pointsKey = getPointsKey(member.name);
+        const pointsRaw = normalized[pointsKey];
+        const points = pointsRaw == null ? tasks : Number(pointsRaw);
+        normalized[pointsKey] = Number.isFinite(points) ? points : tasks;
+      }
+
+      return normalized;
+    });
   }, [data]);
 
   const totalsByMember = useMemo(() => {
@@ -256,14 +841,21 @@ function App() {
       return [];
     }
 
+    const metricsByUserId = new Map(
+      data.memberPeriodMetrics.map((memberMetrics) => [memberMetrics.userId, memberMetrics]),
+    );
+
     return data.members.map((member) => {
-      const completed = weeklyActivities.reduce((acc, day) => acc + Number(day[member.name] ?? 0), 0);
+      const memberMetrics = metricsByUserId.get(member.userId);
+      const completed = Number(memberMetrics?.tasks ?? 0);
+      const points = Number(memberMetrics?.points ?? 0);
       return {
         ...member,
         completed,
+        points,
       };
     });
-  }, [data, weeklyActivities]);
+  }, [data]);
 
   const dailyOverview = useMemo<DailyOverviewRow[]>(() => {
     if (!data) {
@@ -272,24 +864,21 @@ function App() {
 
     return weeklyActivities.map((day) => {
       const total = data.members.reduce((acc, member) => acc + Number(day[member.name] ?? 0), 0);
+      const totalPoints = data.members.reduce(
+        (acc, member) => acc + Number(day[getPointsKey(member.name)] ?? 0),
+        0,
+      );
       return {
         ...day,
         total,
+        totalPoints,
+        mobileDayLabel: toMobileDayLabel(day.metricDate),
       };
     });
   }, [data, weeklyActivities]);
 
-  const weeklyTotal = useMemo(
-    () => dailyOverview.reduce((acc, day) => acc + day.total, 0),
-    [dailyOverview],
-  );
-
-  const activeDays = useMemo(
-    () => dailyOverview.filter((day) => day.total > 0).length,
-    [dailyOverview],
-  );
-
-  const avgTasksPerActiveDay = activeDays > 0 ? (weeklyTotal / activeDays).toFixed(1) : '0';
+  const weeklyTotal = data?.totalTasks ?? 0;
+  const weeklyPointsTotal = data?.totalPoints ?? 0;
 
   const topMember = useMemo(() => {
     if (!totalsByMember.length) {
@@ -301,18 +890,29 @@ function App() {
     );
   }, [totalsByMember]);
 
-  const loadGap = useMemo(() => {
+  const topPointsMember = useMemo(() => {
     if (!totalsByMember.length) {
-      return 0;
+      return null;
     }
 
-    const completions = totalsByMember.map((member) => member.completed);
-    return Math.max(...completions) - Math.min(...completions);
+    return totalsByMember.reduce((best, member) =>
+      member.points > best.points ? member : best,
+    );
   }, [totalsByMember]);
+
+  const tasksDeltaLabel = useMemo(
+    () => formatDeltaLabel(data?.tasksDeltaPercent ?? null),
+    [data?.tasksDeltaPercent],
+  );
+  const pointsDeltaLabel = useMemo(
+    () => formatDeltaLabel(data?.pointsDeltaPercent ?? null),
+    [data?.pointsDeltaPercent],
+  );
+  const periodMemberTasksLabel = data?.activityRange === 'month' ? 'este mes' : 'esta semana';
 
   const busiestDay = useMemo(() => {
     if (!dailyOverview.length) {
-      return { day: '-', total: 0 };
+      return { day: '-', total: 0, totalPoints: 0 };
     }
 
     return dailyOverview.reduce((best, day) => (day.total > best.total ? day : best));
@@ -371,9 +971,17 @@ function App() {
       return 0;
     }
 
-    const dayRecord = dailyOverview.find((day) => day.day === todayLabel);
+    const dayRecord = dailyOverview.find((day) => day.metricDate === todayIsoDate);
     return dayRecord ? Number(dayRecord[activeMember] ?? 0) : 0;
-  }, [dailyOverview, activeMember, todayLabel]);
+  }, [dailyOverview, activeMember, todayIsoDate]);
+  const todayPointsForActiveMember = useMemo(() => {
+    if (!dailyOverview.length) {
+      return 0;
+    }
+
+    const dayRecord = dailyOverview.find((day) => day.metricDate === todayIsoDate);
+    return dayRecord ? Number(dayRecord[getPointsKey(activeMember)] ?? 0) : 0;
+  }, [dailyOverview, activeMember, todayIsoDate]);
 
   const isTodaySelected = taskDate === todayIsoDate;
   const taskFilterCategories = useMemo(
@@ -395,6 +1003,55 @@ function App() {
     ? getScoreBadgeClass(selectedCommunityTask.score)
     : 'border-black/12 bg-white/70 text-ink/60';
   const createTaskScoreBadgeClass = getScoreBadgeClass(communityTaskScore);
+  const createCategoryOptions = useMemo(
+    () =>
+      taskCategories.map((category) => ({
+        value: category,
+        label: category,
+        hint: 'Categoría activa',
+      })),
+    [taskCategories],
+  );
+  const scoreOptions = useMemo(
+    () =>
+      [2, 3, 4, 5, 6, 7].map((score) => ({
+        value: String(score),
+        label: String(score),
+        hint:
+          score <= 3
+            ? 'Ritmo ligero'
+            : score <= 5
+              ? 'Impacto medio'
+              : 'Alta recompensa',
+        chip: `${score} pts`,
+      })),
+    [],
+  );
+  const filterCategoryOptions = useMemo(
+    () => [
+      {
+        value: '',
+        label: 'Todas',
+        hint: `${taskFilterCategories.length || 0} categorías disponibles`,
+      },
+      ...taskFilterCategories.map((category) => ({
+        value: category,
+        label: category,
+        hint: 'Filtro puntual',
+      })),
+    ],
+    [taskFilterCategories],
+  );
+  const taskDescriptionOptions = useMemo(
+    () =>
+      filteredCommunityTasks.map((task) => ({
+        value: task.name,
+        label: task.name,
+        hint: task.category,
+        chip: `${task.score} pts`,
+      })),
+    [filteredCommunityTasks],
+  );
   const isCommunityDeleteNameMatch =
     communityToDelete !== null && communityDeleteConfirmName.trim() === communityToDelete.name;
 
@@ -415,6 +1072,27 @@ function App() {
       color: member.color,
     }));
   }, [totalsByMember]);
+
+  const donutPointsData = useMemo(() => {
+    const withPoints = totalsByMember.filter((member) => member.points > 0);
+
+    if (withPoints.length) {
+      return withPoints.map((member) => ({
+        name: member.name,
+        value: member.points,
+        color: member.color,
+      }));
+    }
+
+    return totalsByMember.map((member) => ({
+      name: member.name,
+      value: 1,
+      color: member.color,
+    }));
+  }, [totalsByMember]);
+
+  const topTasks = data?.topTasks ?? [];
+  const recentCommunityActivities = data?.recentCommunityActivities ?? [];
 
   useEffect(() => {
     setCommunityTasks(tasksData);
@@ -1503,6 +2181,40 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                 >
                   <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/55">Mi Perfil</p>
 
+                  <div className="mt-3 flex items-center justify-center">
+                    <button
+                      type="button"
+                      className={`theme-toggle ${resolvedTheme === 'dark' ? 'is-dark' : 'is-light'}`}
+                      role="switch"
+                      aria-checked={resolvedTheme === 'dark'}
+                      aria-label="Cambiar entre modo claro y oscuro"
+                      onClick={handleThemeSwitch}
+                    >
+                      <span className="theme-toggle-track" aria-hidden />
+                      <span className="theme-toggle-thumb" aria-hidden>
+                        {resolvedTheme === 'dark' ? (
+                          <svg viewBox="0 0 24 24" className="h-4 w-4">
+                            <path
+                              fill="currentColor"
+                              d="M14.53 2.7a.75.75 0 0 1 .84.92 8.7 8.7 0 1 0 10.95 10.95a.75.75 0 0 1 .92.84A10.2 10.2 0 1 1 14.53 2.7Z"
+                            />
+                            <path
+                              fill="currentColor"
+                              d="M18.1 6.35a.75.75 0 0 1 .9-.13l.1.08l.08.1l.31.52l.53.31a.75.75 0 0 1 .13.9l-.08.1l-.1.08l-.52.31l-.31.53a.75.75 0 0 1-.9.13l-.1-.08l-.08-.1l-.31-.53l-.52-.31a.75.75 0 0 1-.13-.9l.08-.1l.1-.08l.52-.31l.31-.52Z"
+                            />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="h-4 w-4">
+                            <path
+                              fill="currentColor"
+                              d="M12 4.25a.75.75 0 0 1 .75.75v1.8a.75.75 0 0 1-1.5 0V5a.75.75 0 0 1 .75-.75Zm0 12.95a.75.75 0 0 1 .75.75v1.8a.75.75 0 0 1-1.5 0v-1.8a.75.75 0 0 1 .75-.75Zm7.75-5.2a.75.75 0 0 1 .75.75a.75.75 0 0 1-.75.75h-1.8a.75.75 0 0 1 0-1.5h1.8Zm-13.95 0a.75.75 0 0 1 .75.75a.75.75 0 0 1-.75.75H4a.75.75 0 0 1 0-1.5h1.8Zm9.3-5.7a.75.75 0 0 1 1.06 0l1.27 1.27a.75.75 0 0 1-1.06 1.06L15.1 7.36a.75.75 0 0 1 0-1.06Zm-7.53 7.53a.75.75 0 0 1 1.06 0l1.27 1.27a.75.75 0 1 1-1.06 1.06L7.57 14.9a.75.75 0 0 1 0-1.06Zm8.8 1.27a.75.75 0 1 1 1.06 1.06l-1.27 1.27a.75.75 0 1 1-1.06-1.06l1.27-1.27Zm-7.53-7.53a.75.75 0 1 1 1.06 1.06L8.63 9.9a.75.75 0 1 1-1.06-1.06l1.27-1.27ZM12 8.25a3.75 3.75 0 1 1 0 7.5a3.75 3.75 0 0 1 0-7.5Z"
+                            />
+                          </svg>
+                        )}
+                      </span>
+                    </button>
+                  </div>
+
                   <form id="profile-settings-form" onSubmit={handleProfileSave} className="mt-4 space-y-3">
                     <section className="rounded-xl bg-white/70 p-3">
                       <p className="metric-label text-center">Icono del perfil</p>
@@ -1775,37 +2487,16 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     </button>
                   </div>
 
-                  <div className="task-field-shell">
-                    <span className="task-field-icon" aria-hidden>
-                      ⌁
-                    </span>
-                    <select
-                      value={communityTaskCategory}
-                      onChange={(event) => setCommunityTaskCategory(event.target.value)}
-                      className="task-field-select"
-                    >
-                      {taskCategories.length === 0 && (
-                        <option value="">Crea una categoría</option>
-                      )}
-                      {taskCategories.map((category) => (
-                        <option key={category} value={category}>
-                          {category}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="task-field-caret" aria-hidden>
-                      <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
-                        <path
-                          fill="currentColor"
-                          d="m5.5 7.5 4.5 5 4.5-5"
-                          stroke="currentColor"
-                          strokeWidth="1.2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </span>
-                  </div>
+                  <TaskDropdown
+                    ariaLabel="Seleccionar categoría para la tarea"
+                    icon="⌁"
+                    value={communityTaskCategory}
+                    onChange={setCommunityTaskCategory}
+                    options={createCategoryOptions}
+                    placeholder="Crea una categoría"
+                    emptyLabel="Primero crea una categoría"
+                    disabled={taskCategories.length === 0}
+                  />
 
                   {isCreateCategoryOpen && (
                     <div className="flex flex-col items-stretch gap-2 rounded-xl border border-black/10 bg-white/85 p-2.5 sm:flex-row sm:items-center">
@@ -1831,34 +2522,15 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   <div className="flex items-center gap-3">
                     <span className="metric-label">Puntuación (2 a 7)</span>
                   </div>
-                  <div className="task-field-shell">
-                    <span className="task-field-icon" aria-hidden>
-                      ★
-                    </span>
-                    <select
-                      value={communityTaskScore}
-                      onChange={(event) => setCommunityTaskScore(Number(event.target.value))}
-                      className="task-field-select"
-                    >
-                      {[2, 3, 4, 5, 6, 7].map((score) => (
-                        <option key={score} value={score}>
-                          {score}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="task-field-caret" aria-hidden>
-                      <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
-                        <path
-                          fill="currentColor"
-                          d="m5.5 7.5 4.5 5 4.5-5"
-                          stroke="currentColor"
-                          strokeWidth="1.2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </span>
-                  </div>
+                  <TaskDropdown
+                    ariaLabel="Seleccionar puntuación de la tarea"
+                    icon="★"
+                    value={String(communityTaskScore)}
+                    onChange={(nextValue) => setCommunityTaskScore(Number(nextValue))}
+                    options={scoreOptions}
+                    placeholder="Elige puntuación"
+                    variant="score"
+                  />
                 </label>
 
                 <div className="mt-5 flex justify-center pt-1">
@@ -1902,17 +2574,17 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                 >
                   <div className="flex items-center gap-3">
                     <span
-                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg font-semibold text-white"
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-white"
                       style={{ backgroundColor: member.color }}
                     >
-                      {member.initials.slice(0, 1)}
+                      {renderProfileIcon(member.avatarIconKey, 'h-7 w-7 rounded-md object-cover text-white')}
                     </span>
                     <div className="min-w-0">
                       <h3 className="truncate font-heading text-xl leading-none text-ink sm:text-[2rem]">
                         {member.name}
                       </h3>
                       <p className="mt-1 text-sm text-ink/68 sm:text-base">
-                        {member.completed} tareas esta semana
+                        {member.completed} tareas {periodMemberTasksLabel}
                       </p>
                     </div>
                   </div>
@@ -1940,7 +2612,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               </p>
             </div>
             <span className="w-full rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-xs uppercase tracking-[0.15em] text-ink/70 sm:w-auto">
-              Día seleccionado: {selectedDayLabel}
+              {selectedDayLabel}
             </span>
           </div>
 
@@ -1960,11 +2632,14 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="flex items-center justify-center">
                     <span
-                      className="inline-flex h-[3.75rem] w-[3.75rem] items-center justify-center rounded-full text-base font-semibold text-white shadow-sm ring-2 ring-white/80"
+                      className="inline-flex h-[3.75rem] w-[3.75rem] items-center justify-center rounded-full text-white shadow-sm ring-2 ring-white/80"
                       style={{ backgroundColor: activeMemberProfile?.color ?? '#8b6a52' }}
                       title={activeMemberProfile?.name ?? activeMember}
                     >
-                      {activeMemberProfile?.initials ?? 'NA'}
+                      {renderProfileIcon(
+                        activeMemberProfile?.avatarIconKey,
+                        'h-8 w-8 rounded-md object-cover text-white',
+                      )}
                     </span>
                   </div>
 
@@ -1993,82 +2668,46 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
                 <label className="space-y-2 sm:max-w-[260px]">
                   <span className="metric-label">Filtrar por categoría</span>
-                  <div className="task-field-shell">
-                    <span className="task-field-icon" aria-hidden>
-                      ⌁
-                    </span>
-                    <select
-                      value={taskFilterCategory}
-                      onChange={(event) => setTaskFilterCategory(event.target.value)}
-                      disabled={taskFilterCategories.length === 0}
-                      className="task-field-select"
-                    >
-                      <option value="">Todas</option>
-                      {taskFilterCategories.map((category) => (
-                        <option key={category} value={category}>
-                          {category}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="task-field-caret" aria-hidden>
-                      <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
-                        <path
-                          fill="currentColor"
-                          d="m5.5 7.5 4.5 5 4.5-5"
-                          stroke="currentColor"
-                          strokeWidth="1.2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </span>
-                  </div>
+                  <TaskDropdown
+                    ariaLabel="Filtrar tareas por categoría"
+                    icon="⌁"
+                    value={taskFilterCategory}
+                    onChange={setTaskFilterCategory}
+                    options={filterCategoryOptions}
+                    placeholder="Todas"
+                    disabled={taskFilterCategories.length === 0}
+                  />
                 </label>
 
                 <label className="space-y-2">
                   <span className="metric-label">Tarea realizada</span>
-                  <div className="task-field-shell task-field-shell-select">
-                    <span className="task-field-icon task-field-icon-select" aria-hidden>
-                      ✓
-                    </span>
-                    <div className="task-field-select-wrap">
-                      <select
-                        value={taskDescription}
-                        onChange={(event) => setTaskDescription(event.target.value)}
-                        disabled={filteredCommunityTasks.length === 0}
-                        className="task-field-select task-field-select-task"
-                      >
-                        {communityTasks.length === 0 && <option value="">No hay tareas creadas</option>}
-                        {communityTasks.length > 0 && filteredCommunityTasks.length === 0 && (
-                          <option value="">No hay tareas para esta categoría</option>
-                        )}
-                        {filteredCommunityTasks.map((task) => (
-                          <option key={task.id} value={task.name}>
-                            {task.name}
-                          </option>
-                        ))}
-                      </select>
-                      {selectedCommunityTask && (
+                  <TaskDropdown
+                    ariaLabel="Seleccionar tarea realizada"
+                    icon="✓"
+                    value={taskDescription}
+                    onChange={setTaskDescription}
+                    options={taskDescriptionOptions}
+                    placeholder={
+                      communityTasks.length === 0
+                        ? 'No hay tareas creadas'
+                        : 'No hay tareas para esta categoría'
+                    }
+                    emptyLabel={
+                      communityTasks.length === 0
+                        ? 'Primero crea una tarea'
+                        : 'Prueba con otra categoría'
+                    }
+                    disabled={filteredCommunityTasks.length === 0}
+                    selectedChip={
+                      selectedCommunityTask ? (
                         <span
-                          className={`task-field-badge rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] whitespace-nowrap ${selectedTaskBadgeClass}`}
+                          className={`task-field-badge rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] whitespace-nowrap ${selectedTaskBadgeClass}`}
                         >
                           {selectedCommunityTask.score} pts
                         </span>
-                      )}
-                      <span className="task-field-caret task-field-caret-overlay" aria-hidden>
-                        <svg viewBox="0 0 20 20" className="h-3.5 w-3.5">
-                          <path
-                            fill="currentColor"
-                            d="m5.5 7.5 4.5 5 4.5-5"
-                            stroke="currentColor"
-                            strokeWidth="1.2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      </span>
-                    </div>
-                  </div>
+                      ) : null
+                    }
+                  />
                 </label>
 
                 <div className="flex justify-center">
@@ -2088,19 +2727,37 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               </form>
 
               <aside className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-3.5 sm:p-4">
-                <article className="rounded-xl border border-black/10 bg-white/85 p-3">
-                  <p className="metric-label">Estado de hoy</p>
-                  <div className="mt-2 flex items-center justify-between gap-3">
+                <article className="today-status-card">
+                  <div className="today-status-top">
                     <div>
-                      <p className="text-2xl font-heading text-ink">{todayForActiveMember} tareas</p>
-                      <p className="text-xs text-ink/65">Integrante activo en {todayLabel}</p>
+                      <p className="metric-label">Estado de hoy</p>
+                      <p className="today-status-date">{formatDateLabel(todayIsoDate)}</p>
                     </div>
                     <span
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-xs font-semibold text-white"
+                      className="today-status-avatar"
                       style={{ backgroundColor: activeMemberProfile?.color ?? '#8b6a52' }}
                       title={activeMemberProfile?.name ?? activeMember}
                     >
-                      {activeMemberProfile?.initials ?? 'NA'}
+                      {renderProfileIcon(
+                        activeMemberProfile?.avatarIconKey,
+                        'h-5 w-5 rounded-sm object-cover text-white',
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="today-status-main">
+                    <p className="today-status-count">{todayForActiveMember}</p>
+                    <p className="today-status-unit">
+                      {todayForActiveMember === 1 ? 'tarea' : 'tareas'}
+                    </p>
+                  </div>
+
+                  <div className="today-status-row">
+                    <span className="today-status-member">
+                      {activeMemberProfile?.name ?? activeMember}
+                    </span>
+                    <span className="today-status-points">
+                      {todayPointsForActiveMember} {todayPointsForActiveMember === 1 ? 'pto' : 'pts'}
                     </span>
                   </div>
                 </article>
@@ -2149,7 +2806,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                           <div className="recent-log-top">
                             <div className="recent-log-tags">
                               <span
-                                className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${getScoreBadgeClass(entry.scoreSnapshot)}`}
+                                className={`shrink-0 rounded-full border px-2 py-[0.22rem] text-[9px] font-semibold uppercase tracking-[0.12em] ${getScoreBadgeClass(entry.scoreSnapshot)}`}
                               >
                                 {entry.pointsTotal} pts
                               </span>
@@ -2199,15 +2856,47 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
           <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">
-                Actividades semanales
+                Actividades y métricas
               </h2>
               <p className="text-sm text-ink/65">
-                Seguimiento de carga por integrante y ritmo de la semana.
+                Filtra por periodo y compara tareas y puntos por integrante.
               </p>
             </div>
-            <span className="w-full rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-xs uppercase tracking-[0.15em] text-ink/70 sm:w-auto">
-              Semana actual
-            </span>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
+              <div
+                role="tablist"
+                aria-label="Rango de actividades"
+                className="grid w-full grid-cols-2 rounded-xl border border-black/10 bg-white/70 p-1 sm:w-[220px]"
+              >
+                {activityRangeOptions.map((option) => {
+                  const isActive = activityRange === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      onClick={() => setActivityRange(option.value)}
+                      className={`rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] transition ${
+                        isActive
+                          ? 'bg-[#8a5a3f] text-white shadow-[0_8px_18px_-10px_rgba(72,43,23,0.55)]'
+                          : 'text-ink/70 hover:bg-black/5'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-[11px] uppercase tracking-[0.15em] text-ink/70">
+                  {data?.activityRangeLabel ?? 'Periodo'}
+                </span>
+                <span className="rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-[11px] uppercase tracking-[0.15em] text-ink/70">
+                  {data?.activityMonthLabel ?? 'Mes actual'}
+                </span>
+              </div>
+            </div>
           </div>
 
           {isLoading && (
@@ -2226,87 +2915,166 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
           {!isLoading && !isError && data && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <article className="dashboard-card">
-                  <p className="metric-label">Tareas esta semana</p>
-                  <p className="metric-value">{weeklyTotal}</p>
-                  <p className="metric-note">Acumulado total entre integrantes</p>
-                </article>
-
-                <article className="dashboard-card">
-                  <p className="metric-label">Lider semanal</p>
-                  <p className="metric-value">{topMember?.name ?? '-'}</p>
-                  <p className="metric-note">{topMember?.completed ?? 0} tareas completadas</p>
-                </article>
-
-                <article className="dashboard-card">
-                  <p className="metric-label">Promedio diario</p>
-                  <p className="metric-value">{avgTasksPerActiveDay}</p>
-                  <p className="metric-note">Solo considerando días activos</p>
-                </article>
-
-                <article className="dashboard-card">
-                  <p className="metric-label">Desbalance</p>
-                  <p className="metric-value">{loadGap}</p>
-                  <p className="metric-note">Brecha entre mayor y menor carga</p>
-                </article>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <div className="space-y-4">
                 <article className="rounded-2xl border border-black/10 bg-white/75 p-2 sm:p-4">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="mb-3 flex flex-col items-start gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
                     <p className="text-sm font-semibold uppercase tracking-[0.14em] text-ink/70">
                       Ritmo diario y contribución
                     </p>
-                    <p className="text-xs text-ink/60">
-                      Día con mayor actividad: <strong>{busiestDay.day}</strong> ({busiestDay.total})
+                    <p className="w-full text-[11px] leading-relaxed text-ink/58 sm:w-auto sm:text-xs">
+                      Día con mayor actividad: <strong>{busiestDay.day}</strong> ({busiestDay.total} tareas, {busiestDay.totalPoints} pts)
                     </p>
                   </div>
-                  <div className="h-[280px] sm:h-[360px]">
+                  <div className="h-[300px] sm:h-[360px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={dailyOverview} barGap={6}>
+                      <ComposedChart
+                        data={dailyOverview}
+                        barGap={0}
+                        barCategoryGap="30%"
+                        margin={{ top: 8, right: 4, bottom: 8, left: -8 }}
+                      >
                         <CartesianGrid
                           vertical={false}
                           strokeDasharray="3 6"
                           stroke="rgba(94, 74, 59, 0.2)"
                         />
                         <XAxis
-                          dataKey="day"
+                          dataKey={isMobileViewport ? 'mobileDayLabel' : 'day'}
                           tick={{ fill: '#5b4537', fontSize: 12, fontWeight: 600 }}
                           axisLine={false}
                           tickLine={false}
                         />
                         <YAxis
-                          tick={{ fill: '#5b4537', fontSize: 12 }}
-                          axisLine={false}
+                          tick={{ fill: 'rgba(91, 69, 55, 0.78)', fontSize: 10 }}
+                          axisLine={{ stroke: 'rgba(91, 69, 55, 0.36)', strokeWidth: 1 }}
                           tickLine={false}
+                          width={14}
+                          mirror
+                          tickMargin={2}
+                          tickCount={5}
                           allowDecimals={false}
                         />
                         <Tooltip
+                          shared={false}
                           cursor={{ fill: 'rgba(128, 98, 76, 0.09)' }}
                           contentStyle={{
                             borderRadius: '14px',
                             border: '1px solid rgba(88, 67, 51, 0.18)',
                             boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
                           }}
+                          formatter={(value, name, item) => {
+                            if (!item) {
+                              return [value, name];
+                            }
+
+                            const dataKey = String(item.dataKey ?? '');
+                            if (dataKey.endsWith('__points')) {
+                              const payload = item.payload as Record<string, unknown>;
+                              const taskKey = dataKey.slice(0, -'__points'.length);
+                              const tasks = Number(payload[taskKey] ?? 0);
+                              if (barHoverMetric === 'tasks') {
+                                return [`${tasks} tareas`, String(name)];
+                              }
+
+                              return [`${Number(value ?? 0)} pts`, String(name)];
+                            }
+
+                            if (dataKey === 'totalPoints') {
+                              return [`${Number(value ?? 0)} pts`, String(name)];
+                            }
+
+                            return [value, name];
+                          }}
                         />
-                        <Legend wrapperStyle={{ fontSize: '12px', textTransform: 'uppercase' }} />
+                        {!isMobileViewport && (
+                          <Legend
+                            wrapperStyle={{
+                              fontSize: '11px',
+                              textTransform: 'uppercase',
+                              paddingTop: '8px',
+                            }}
+                          />
+                        )}
 
                         {data.members.map((member) => (
                           <Bar
                             key={member.name}
-                            dataKey={member.name}
+                            dataKey={getPointsKey(member.name)}
                             name={member.name}
                             fill={member.color}
-                            radius={[7, 7, 0, 0]}
                             maxBarSize={28}
+                            radius={[7, 7, 0, 0]}
+                            shape={(shapeProps: unknown) => {
+                              const normalizedShapeProps = (shapeProps ?? {}) as {
+                                dataKey?: string;
+                                fill?: string;
+                                height?: number;
+                                payload?: Record<string, unknown>;
+                                width?: number;
+                                x?: number;
+                                y?: number;
+                              };
+                              const {
+                                x = 0,
+                                y = 0,
+                                width = 0,
+                                height = 0,
+                                fill = '#7a5b48',
+                                payload = {},
+                                dataKey = '',
+                              } = normalizedShapeProps;
+
+                              if (height <= 0 || width <= 0) {
+                                return <g />;
+                              }
+
+                              const key = String(dataKey);
+                              const taskKey = key.endsWith('__points')
+                                ? key.slice(0, -'__points'.length)
+                                : key;
+                              const points = Number(payload[key] ?? 0);
+                              const tasks = Number(payload[taskKey] ?? 0);
+                              const ratio = points > 0 ? Math.min(tasks / points, 1) : 0;
+                              const innerHeight = Math.max(height * ratio, tasks > 0 ? 3 : 0);
+                              const innerWidth = Math.max(width * 0.5, 4);
+                              const innerX = x + (width - innerWidth) / 2;
+                              const innerY = y + (height - innerHeight);
+
+                              return (
+                                <g>
+                                  <rect
+                                    x={x}
+                                    y={y}
+                                    width={width}
+                                    height={height}
+                                    rx={6}
+                                    ry={6}
+                                    fill={hexToRgba(fill, 0.42)}
+                                    onMouseEnter={() => setBarHoverMetric('points')}
+                                    onClick={() => setBarHoverMetric('points')}
+                                  />
+                                  <rect
+                                    x={innerX}
+                                    y={innerY}
+                                    width={innerWidth}
+                                    height={innerHeight}
+                                    rx={4}
+                                    ry={4}
+                                    fill={hexToRgba(fill, 0.92)}
+                                    onMouseEnter={() => setBarHoverMetric('tasks')}
+                                    onMouseLeave={() => setBarHoverMetric('points')}
+                                    onClick={() => setBarHoverMetric('tasks')}
+                                  />
+                                </g>
+                              );
+                            }}
                           />
                         ))}
 
                         <Line
                           type="monotone"
-                          dataKey="total"
-                          name="Total diario"
+                          dataKey="totalPoints"
+                          name="Total diario (pts)"
                           stroke="#51392d"
                           strokeWidth={2.5}
                           dot={{ r: 3, strokeWidth: 1, fill: '#ffffff' }}
@@ -2317,67 +3085,290 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   </div>
                 </article>
 
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <article className="dashboard-card">
+                    <p className="metric-label">Tareas totales</p>
+                    <p className="metric-value">{weeklyTotal}</p>
+                    <p className="metric-note">
+                      {tasksDeltaLabel} {data.previousRangeLabel}
+                    </p>
+                  </article>
+
+                  <article className="dashboard-card">
+                    <p className="metric-label">Puntos totales</p>
+                    <p className="metric-value">{weeklyPointsTotal}</p>
+                    <p className="metric-note">
+                      {pointsDeltaLabel} {data.previousRangeLabel}
+                    </p>
+                  </article>
+
+                  <article className="dashboard-card">
+                    <p className="metric-label">Líder en tareas</p>
+                    <p className="metric-value">{topMember?.name ?? '-'}</p>
+                    <p className="metric-note">{topMember?.completed ?? 0} tareas completadas</p>
+                  </article>
+
+                  <article className="dashboard-card">
+                    <p className="metric-label">Líder en puntos</p>
+                    <p className="metric-value">{topPointsMember?.name ?? '-'}</p>
+                    <p className="metric-note">{topPointsMember?.points ?? 0} puntos obtenidos</p>
+                  </article>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <article className="space-y-4 rounded-2xl border border-black/10 bg-white/75 p-4">
+                    <div>
+                      <p className="text-sm font-semibold uppercase tracking-[0.14em] text-ink/70">
+                        Distribución de tareas
+                      </p>
+                      <p className="text-xs text-ink/60">
+                        Participación relativa por integrante en el periodo filtrado.
+                      </p>
+                    </div>
+
+                    <div className="h-52 sm:h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={donutData}
+                            dataKey="value"
+                            nameKey="name"
+                            innerRadius={52}
+                            outerRadius={78}
+                            paddingAngle={2}
+                          >
+                            {donutData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={{
+                              borderRadius: '14px',
+                              border: '1px solid rgba(88, 67, 51, 0.18)',
+                              boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
+                            }}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="space-y-3">
+                      {totalsByMember.map((member) => {
+                        const share = weeklyTotal > 0 ? (member.completed / weeklyTotal) * 100 : 0;
+
+                        return (
+                          <div key={member.name} className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs uppercase tracking-[0.12em] text-ink/70">
+                              <span>{member.name}</span>
+                              <span>
+                                {member.completed} tareas ({share.toFixed(0)}%)
+                              </span>
+                            </div>
+                            <div className="h-2.5 overflow-hidden rounded-full bg-black/10">
+                              <div
+                                className="h-full rounded-full transition-all duration-500"
+                                style={{
+                                  width: `${share}%`,
+                                  backgroundColor: member.color,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </article>
+
+                  <article className="space-y-4 rounded-2xl border border-black/10 bg-white/75 p-4">
+                    <div>
+                      <p className="text-sm font-semibold uppercase tracking-[0.14em] text-ink/70">
+                        Distribución de puntos
+                      </p>
+                      <p className="text-xs text-ink/60">
+                        Participación relativa por integrante según puntos acumulados.
+                      </p>
+                    </div>
+
+                    <div className="h-52 sm:h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={donutPointsData}
+                            dataKey="value"
+                            nameKey="name"
+                            innerRadius={52}
+                            outerRadius={78}
+                            paddingAngle={2}
+                          >
+                            {donutPointsData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={{
+                              borderRadius: '14px',
+                              border: '1px solid rgba(88, 67, 51, 0.18)',
+                              boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
+                            }}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="space-y-3">
+                      {totalsByMember.map((member) => {
+                        const share = weeklyPointsTotal > 0 ? (member.points / weeklyPointsTotal) * 100 : 0;
+
+                        return (
+                          <div key={member.name} className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs uppercase tracking-[0.12em] text-ink/70">
+                              <span>{member.name}</span>
+                              <span>
+                                {member.points} pts ({share.toFixed(0)}%)
+                              </span>
+                            </div>
+                            <div className="h-2.5 overflow-hidden rounded-full bg-black/10">
+                              <div
+                                className="h-full rounded-full transition-all duration-500"
+                                style={{
+                                  width: `${share}%`,
+                                  backgroundColor: member.color,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </article>
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
                 <article className="space-y-4 rounded-2xl border border-black/10 bg-white/75 p-4">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.14em] text-ink/70">
-                      Distribución semanal
-                    </p>
-                    <p className="text-xs text-ink/60">
-                      Participación relativa por integrante en el total.
-                    </p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold uppercase tracking-[0.14em] text-ink/70">
+                        Ranking de tareas
+                      </p>
+                      <p className="text-xs text-ink/60">
+                        Tareas más repetidas en el periodo actual.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-black/12 bg-white/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-ink/65">
+                      Top {topTasks.length}
+                    </span>
                   </div>
 
-                  <div className="h-44">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={donutData}
-                          dataKey="value"
-                          nameKey="name"
-                          innerRadius={52}
-                          outerRadius={78}
-                          paddingAngle={2}
+                  {topTasks.length === 0 && (
+                    <p className="rounded-xl border border-dashed border-black/15 bg-white/65 px-3 py-2 text-sm text-ink/65">
+                      Aún no hay tareas registradas en este periodo.
+                    </p>
+                  )}
+
+                  {topTasks.length > 0 && (
+                    <div className="space-y-3">
+                      {topTasks.map((task, index) => {
+                        const maxTasks = topTasks[0]?.tasks ?? 1;
+                        const width = maxTasks > 0 ? (task.tasks / maxTasks) * 100 : 0;
+                        return (
+                          <div key={task.taskId} className="space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="truncate text-sm font-semibold text-ink/82">
+                                {index + 1}. {task.taskName}
+                              </p>
+                              <span className="shrink-0 text-xs uppercase tracking-[0.1em] text-ink/65">
+                                x {task.tasks} · {task.points} pts
+                              </span>
+                            </div>
+                            <p className="text-[11px] uppercase tracking-[0.12em] text-ink/55">
+                              {task.categoryName}
+                            </p>
+                            <div className="h-2.5 overflow-hidden rounded-full bg-black/10">
+                              <div
+                                className="h-full rounded-full bg-[#8a5a3f]/75 transition-all duration-500"
+                                style={{ width: `${width}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </article>
+
+                <article className="space-y-4 rounded-2xl border border-black/10 bg-white/75 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="metric-label">Actividad reciente</p>
+                      <p className="mt-1 text-xs text-ink/62">
+                        Últimos registros de la comunidad en el periodo.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-black/10 bg-white/75 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink/62">
+                      {recentCommunityActivities.length}/6
+                    </span>
+                  </div>
+
+                  {recentCommunityActivities.length === 0 && (
+                    <div className="recent-log-empty">
+                      <span className="recent-log-empty-icon" aria-hidden>
+                        <svg viewBox="0 0 24 24" className="h-4 w-4">
+                          <path
+                            fill="currentColor"
+                            d="M7 3.75A1.75 1.75 0 0 0 5.25 5.5v13A1.75 1.75 0 0 0 7 20.25h10A1.75 1.75 0 0 0 18.75 18.5v-13A1.75 1.75 0 0 0 17 3.75H7Zm1.5 3a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1-.75-.75Zm0 4a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1-.75-.75Zm.75 3.25a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 0-1.5h-3.5Z"
+                          />
+                        </svg>
+                      </span>
+                      <div>
+                        <p className="text-sm font-semibold text-ink/78">
+                          Sin actividad reciente para mostrar.
+                        </p>
+                        <p className="mt-1 text-xs text-ink/58">
+                          Los últimos registros comunitarios aparecerán aquí automáticamente.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {recentCommunityActivities.length > 0 && (
+                    <div className="recent-log-stack mt-3">
+                      {recentCommunityActivities.map((activity) => (
+                        <article
+                          key={activity.id}
+                          className="recent-log-card"
+                          style={getRecentLogStyle(activity.categoryName)}
                         >
-                          {donutData.map((entry) => (
-                            <Cell key={entry.name} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={{
-                            borderRadius: '14px',
-                            border: '1px solid rgba(88, 67, 51, 0.18)',
-                            boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
-                          }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
+                          <span className="recent-log-rail" aria-hidden />
+                          <div className="recent-log-shell">
+                            <div className="recent-log-top">
+                              <div className="recent-log-tags">
+                                <span
+                                  className={`shrink-0 rounded-full border px-2 py-[0.22rem] text-[9px] font-semibold uppercase tracking-[0.12em] ${getScoreBadgeClass(activity.pointsTotal)}`}
+                                >
+                                  {activity.pointsTotal} pts
+                                </span>
+                                <span className="recent-log-tag">{activity.categoryName}</span>
+                                <span className="recent-log-tag">{activity.memberName}</span>
+                              </div>
+                              <span className="recent-log-stamp">
+                                {getRecentLogMomentLabel(activity.performedOn)}
+                              </span>
+                            </div>
 
-                  <div className="space-y-3">
-                    {totalsByMember.map((member) => {
-                      const share = weeklyTotal > 0 ? (member.completed / weeklyTotal) * 100 : 0;
-
-                      return (
-                        <div key={member.name} className="space-y-1.5">
-                          <div className="flex items-center justify-between text-xs uppercase tracking-[0.12em] text-ink/70">
-                            <span>{member.name}</span>
-                            <span>
-                              {member.completed} tareas ({share.toFixed(0)}%)
-                            </span>
+                            <div className="recent-log-body">
+                              <p className="recent-log-title">
+                                x {activity.quantity} {activity.taskName}
+                              </p>
+                              <p className="recent-log-meta">
+                                Registro del {toDayLabel(activity.performedOn)}, {formatDateLabel(activity.performedOn)}
+                              </p>
+                            </div>
                           </div>
-                          <div className="h-2.5 overflow-hidden rounded-full bg-black/10">
-                            <div
-                              className="h-full rounded-full transition-all duration-500"
-                              style={{
-                                width: `${share}%`,
-                                backgroundColor: member.color,
-                              }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
                 </article>
               </div>
 
@@ -2406,7 +3397,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     </thead>
                     <tbody>
                       {dailyOverview.map((day) => (
-                        <tr key={day.day} className="rounded-xl">
+                        <tr key={day.metricDate} className="rounded-xl">
                           <td className="table-cell font-semibold text-ink/80">{day.day}</td>
                           {data.members.map((member) => {
                             const tasks = Number(day[member.name] ?? 0);
@@ -2589,6 +3580,17 @@ function toDayLabel(dateValue: string): string {
   return weekdayMap[weekday] ?? 'Lunes';
 }
 
+function toDayWithMonthNumberLabel(dateValue: string): string {
+  const parsed = new Date(`${dateValue}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'Lunes 1 de Enero';
+  }
+
+  const month = new Intl.DateTimeFormat('es-CL', { month: 'long' }).format(parsed);
+  const monthCapitalized = month.charAt(0).toUpperCase() + month.slice(1);
+  return `${toDayLabel(dateValue)} ${parsed.getDate()} de ${monthCapitalized}`;
+}
+
 function formatDateLabel(dateValue: string): string {
   const parsed = new Date(`${dateValue}T12:00:00`);
   if (Number.isNaN(parsed.getTime())) {
@@ -2613,6 +3615,19 @@ function formatDateTimeLabel(dateValue: string): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(parsed);
+}
+
+function formatDeltaLabel(delta: number | null): string {
+  if (delta == null) {
+    return 'Nuevo';
+  }
+
+  if (delta === 0) {
+    return '0%';
+  }
+
+  const sign = delta > 0 ? '+' : '';
+  return `${sign}${delta.toFixed(1)}%`;
 }
 
 function getInviteTokenFromUrl(): string | null {

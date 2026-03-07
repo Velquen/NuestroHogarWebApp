@@ -1,5 +1,13 @@
 import { getSupabaseClient } from '../lib/supabase';
-import type { CommunityDashboardData, CommunityRoleKey, Member, WeeklyActivity } from '../types/community';
+import type {
+  ActivityRange,
+  CommunityDashboardData,
+  CommunityRoleKey,
+  Member,
+  RecentCommunityActivity,
+  TopTaskMetric,
+  WeeklyActivity,
+} from '../types/community';
 
 interface MembershipRow {
   community_id: string;
@@ -34,6 +42,42 @@ interface PresenceRow {
   away_count: number;
   present_count: number;
 }
+
+interface PeriodTaskLogRow {
+  id: string;
+  task_id: string;
+  member_user_id: string;
+  performed_on: string;
+  quantity: number;
+  points_total: number;
+  created_at: string;
+  community_tasks:
+    | {
+        name: string;
+        task_categories:
+          | {
+              name: string;
+            }
+          | {
+              name: string;
+            }[]
+          | null;
+      }
+    | {
+        name: string;
+        task_categories:
+          | {
+              name: string;
+            }
+          | {
+              name: string;
+            }[]
+          | null;
+      }[]
+    | null;
+}
+
+const PERIOD_TASK_LOGS_PAGE_SIZE = 1000;
 
 interface CreateCommunityInviteRow {
   token: string;
@@ -96,9 +140,108 @@ function startOfWeekMonday(date: Date): Date {
   return addDays(normalized, -mondayOffset);
 }
 
+function startOfMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1, 12, 0, 0, 0);
+}
+
+function atMidday(date: Date): Date {
+  const normalized = new Date(date);
+  normalized.setHours(12, 0, 0, 0);
+  return normalized;
+}
+
 function toSpanishDayLabel(date: Date): string {
   const day = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(date).toLowerCase();
   return weekdayMap[day] ?? 'Lunes';
+}
+
+function toShortSpanishDate(date: Date): string {
+  return new Intl.DateTimeFormat('es-CL', { day: '2-digit', month: '2-digit' }).format(date);
+}
+
+function toSpanishMonthLabel(date: Date): string {
+  return new Intl.DateTimeFormat('es-CL', { month: 'long', year: 'numeric' }).format(date);
+}
+
+function capitalizeFirst(value: string): string {
+  if (!value) {
+    return value;
+  }
+
+  return value.slice(0, 1).toUpperCase() + value.slice(1);
+}
+
+function toWeekRangeLabel(start: Date, end: Date): string {
+  const startDay = start.getDate();
+  const endDay = end.getDate();
+  const monthName = capitalizeFirst(
+    new Intl.DateTimeFormat('es-CL', { month: 'long' }).format(end),
+  );
+
+  return `${startDay}-${endDay} ${monthName}`;
+}
+
+function toWeekDayWithNumber(date: Date): string {
+  const shortDay = new Intl.DateTimeFormat('es-CL', { weekday: 'short' })
+    .format(date)
+    .replace('.', '');
+  const normalizedShortDay = shortDay.slice(0, 1).toUpperCase() + shortDay.slice(1);
+  const dayNumber = String(date.getDate()).padStart(2, '0');
+  return `${normalizedShortDay} ${dayNumber}`;
+}
+
+function shiftRange(start: Date, end: Date) {
+  const rangeLengthDays = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  const previousEnd = addDays(start, -1);
+  const previousStart = addDays(previousEnd, -(rangeLengthDays - 1));
+  return {
+    previousStart,
+    previousEnd,
+    rangeLengthDays,
+  };
+}
+
+function computeDeltaPercent(current: number, previous: number): number | null {
+  if (previous === 0) {
+    return current === 0 ? 0 : null;
+  }
+
+  return ((current - previous) / previous) * 100;
+}
+
+function getPreviousRangeLabel(activityRange: ActivityRange): string {
+  return activityRange === 'week' ? 'vs semana anterior' : 'vs periodo anterior';
+}
+
+function resolveActivityRange(range: ActivityRange, today: Date) {
+  const todayMidday = atMidday(today);
+
+  if (range === 'week') {
+    const start = startOfWeekMonday(todayMidday);
+    const end = addDays(start, 6);
+    return {
+      rangeLabel: toWeekRangeLabel(start, end),
+      start,
+      end,
+      monthLabel: toSpanishMonthLabel(todayMidday),
+    };
+  }
+
+  if (range === 'month') {
+    return {
+      rangeLabel: 'Mes actual',
+      start: startOfMonth(todayMidday),
+      end: todayMidday,
+      monthLabel: toSpanishMonthLabel(todayMidday),
+    };
+  }
+
+  return {
+    rangeLabel: 'Mes actual',
+    start: startOfMonth(todayMidday),
+    end: todayMidday,
+    monthLabel: toSpanishMonthLabel(todayMidday),
+  };
 }
 
 function toInitials(name: string): string {
@@ -133,8 +276,24 @@ function toMember(row: MemberRow, index: number): Member {
   };
 }
 
+function toTaskInfo(
+  value: PeriodTaskLogRow['community_tasks'],
+): { taskName: string; categoryName: string } {
+  const task = Array.isArray(value) ? value[0] : value;
+  const categorySource = task?.task_categories;
+  const category = Array.isArray(categorySource)
+    ? (categorySource[0]?.name ?? 'General')
+    : (categorySource?.name ?? 'General');
+
+  return {
+    taskName: task?.name ?? 'Actividad',
+    categoryName: category,
+  };
+}
+
 export async function fetchCommunityDashboard(
   preferredCommunityId?: string | null,
+  activityRange: ActivityRange = 'week',
 ): Promise<CommunityDashboardData> {
   const supabase = getSupabaseClient();
 
@@ -196,24 +355,89 @@ export async function fetchCommunityDashboard(
   const members = (membersData ?? []).map(toMember);
 
   const today = new Date();
-  const weekStart = startOfWeekMonday(today);
-  const weekEnd = addDays(weekStart, 6);
-  const weekStartIso = toIsoDate(weekStart);
-  const weekEndIso = toIsoDate(weekEnd);
+  const resolvedRange = resolveActivityRange(activityRange, today);
+  const rangeStartIso = toIsoDate(resolvedRange.start);
+  const rangeEndIso = toIsoDate(resolvedRange.end);
 
   const { data: metricsData, error: metricsError } = await supabase
     .rpc('rpc_community_metrics', {
       p_community_id: communityId,
-      p_start_date: weekStartIso,
-      p_end_date: weekEndIso,
+      p_start_date: rangeStartIso,
+      p_end_date: rangeEndIso,
     })
     .returns<MetricsRow[]>();
 
   if (metricsError) {
-    throw new Error(`No se pudieron obtener las métricas semanales: ${metricsError.message}`);
+    throw new Error(`No se pudieron obtener las métricas del periodo: ${metricsError.message}`);
   }
 
   const metricsRows = Array.isArray(metricsData) ? metricsData : [];
+  const shiftedRange = shiftRange(resolvedRange.start, resolvedRange.end);
+  const previousStartIso = toIsoDate(shiftedRange.previousStart);
+  const previousEndIso = toIsoDate(shiftedRange.previousEnd);
+
+  const { data: previousMetricsData, error: previousMetricsError } = await supabase
+    .rpc('rpc_community_metrics', {
+      p_community_id: communityId,
+      p_start_date: previousStartIso,
+      p_end_date: previousEndIso,
+    })
+    .returns<MetricsRow[]>();
+
+  if (previousMetricsError) {
+    throw new Error(`No se pudieron obtener las métricas del periodo anterior: ${previousMetricsError.message}`);
+  }
+
+  const previousMetricsRows = Array.isArray(previousMetricsData) ? previousMetricsData : [];
+
+  let previousTotalTasks = 0;
+  let previousTotalPoints = 0;
+  for (const metric of previousMetricsRows) {
+    previousTotalTasks += Number(metric.tasks_count ?? 0);
+    previousTotalPoints += Number(metric.points_count ?? 0);
+  }
+
+  const tasksDeltaPercent = computeDeltaPercent(
+    metricsRows.reduce((acc, metric) => acc + Number(metric.tasks_count ?? 0), 0),
+    previousTotalTasks,
+  );
+  const pointsDeltaPercent = computeDeltaPercent(
+    metricsRows.reduce((acc, metric) => acc + Number(metric.points_count ?? 0), 0),
+    previousTotalPoints,
+  );
+
+  const periodTaskLogs: PeriodTaskLogRow[] = [];
+  let taskLogsOffset = 0;
+
+  while (true) {
+    const { data: periodTaskLogsBatchData, error: periodTaskLogsBatchError } = await supabase
+      .from('task_logs')
+      .select(
+        'id, task_id, member_user_id, performed_on, quantity, points_total, created_at, community_tasks(name, task_categories(name))',
+      )
+      .eq('community_id', communityId)
+      .gte('performed_on', rangeStartIso)
+      .lte('performed_on', rangeEndIso)
+      .order('performed_on', { ascending: false })
+      .order('created_at', { ascending: false })
+      .range(taskLogsOffset, taskLogsOffset + PERIOD_TASK_LOGS_PAGE_SIZE - 1)
+      .returns<PeriodTaskLogRow[]>();
+
+    if (periodTaskLogsBatchError) {
+      throw new Error(
+        `No se pudieron obtener los registros del periodo: ${periodTaskLogsBatchError.message}`,
+      );
+    }
+
+    const batch = Array.isArray(periodTaskLogsBatchData) ? periodTaskLogsBatchData : [];
+    periodTaskLogs.push(...batch);
+
+    if (batch.length < PERIOD_TASK_LOGS_PAGE_SIZE) {
+      break;
+    }
+
+    taskLogsOffset += PERIOD_TASK_LOGS_PAGE_SIZE;
+  }
 
   const { data: presenceRows, error: presenceError } = await supabase
     .rpc('rpc_community_presence', {
@@ -228,35 +452,105 @@ export async function fetchCommunityDashboard(
 
   const safePresenceRows = Array.isArray(presenceRows) ? presenceRows : [];
 
-  const weekRowsByDate = new Map<string, WeeklyActivity>();
+  const periodRowsByDate = new Map<string, WeeklyActivity>();
 
-  for (let offset = 0; offset < 7; offset += 1) {
-    const date = addDays(weekStart, offset);
+  const totalDays =
+    Math.floor(
+      (resolvedRange.end.getTime() - resolvedRange.start.getTime()) / (1000 * 60 * 60 * 24),
+    ) + 1;
+
+  for (let offset = 0; offset < totalDays; offset += 1) {
+    const date = addDays(resolvedRange.start, offset);
     const isoDate = toIsoDate(date);
     const row: WeeklyActivity = {
-      day: toSpanishDayLabel(date),
+      metricDate: isoDate,
+      day: activityRange === 'week' ? toWeekDayWithNumber(date) : toShortSpanishDate(date),
     };
 
     for (const member of members) {
       row[member.name] = 0;
+      row[`${member.name}__points`] = 0;
     }
 
-    weekRowsByDate.set(isoDate, row);
+    periodRowsByDate.set(isoDate, row);
   }
 
   const memberNameByUserId = new Map(members.map((member) => [member.userId, member.name]));
+  const memberMetricsByUserId = new Map<string, { tasks: number; points: number }>();
+  const topTasksByTaskId = new Map<string, TopTaskMetric>();
+  let totalTasks = 0;
+  let totalPoints = 0;
 
   for (const metric of metricsRows) {
-    const row = weekRowsByDate.get(metric.metric_date);
+    const row = periodRowsByDate.get(metric.metric_date);
     const memberName = memberNameByUserId.get(metric.member_user_id);
 
     if (!row || !memberName) {
       continue;
     }
 
+    const taskCount = Number(metric.tasks_count ?? 0);
+    const pointsCount = Number(metric.points_count ?? 0);
     const current = Number(row[memberName] ?? 0);
-    row[memberName] = current + Number(metric.tasks_count ?? 0);
+    row[memberName] = current + taskCount;
+    const pointsKey = `${memberName}__points`;
+    const currentPoints = Number(row[pointsKey] ?? 0);
+    row[pointsKey] = currentPoints + pointsCount;
+
+    totalTasks += taskCount;
+    totalPoints += pointsCount;
+
+    const memberTotals = memberMetricsByUserId.get(metric.member_user_id) ?? { tasks: 0, points: 0 };
+    memberTotals.tasks += taskCount;
+    memberTotals.points += pointsCount;
+    memberMetricsByUserId.set(metric.member_user_id, memberTotals);
   }
+
+  for (const row of periodTaskLogs) {
+    const taskInfo = toTaskInfo(row.community_tasks);
+    const existing = topTasksByTaskId.get(row.task_id);
+    const quantity = Number(row.quantity ?? 0);
+    const points = Number(row.points_total ?? 0);
+
+    if (!existing) {
+      topTasksByTaskId.set(row.task_id, {
+        taskId: row.task_id,
+        taskName: taskInfo.taskName,
+        categoryName: taskInfo.categoryName,
+        tasks: quantity,
+        points,
+      });
+      continue;
+    }
+
+    existing.tasks += quantity;
+    existing.points += points;
+  }
+
+  const topTasks = Array.from(topTasksByTaskId.values())
+    .sort((left, right) => {
+      if (right.tasks !== left.tasks) {
+        return right.tasks - left.tasks;
+      }
+
+      return right.points - left.points;
+    })
+    .slice(0, 5);
+
+  const recentCommunityActivities: RecentCommunityActivity[] = periodTaskLogs.slice(0, 6).map((row) => {
+    const taskInfo = toTaskInfo(row.community_tasks);
+    const memberName = memberNameByUserId.get(row.member_user_id) ?? 'Integrante';
+    return {
+      id: row.id,
+      memberUserId: row.member_user_id,
+      memberName,
+      taskName: taskInfo.taskName,
+      categoryName: taskInfo.categoryName,
+      performedOn: row.performed_on,
+      quantity: Number(row.quantity ?? 0),
+      pointsTotal: Number(row.points_total ?? 0),
+    };
+  });
 
   const presenceToday = safePresenceRows[0]
     ? {
@@ -272,7 +566,27 @@ export async function fetchCommunityDashboard(
     communityName,
     userCommunities,
     members,
-    weeklyActivities: Array.from(weekRowsByDate.values()),
+    weeklyActivities: Array.from(periodRowsByDate.values()),
+    activityRange,
+    activityRangeLabel: resolvedRange.rangeLabel,
+    activityMonthLabel: resolvedRange.monthLabel,
+    previousRangeLabel: getPreviousRangeLabel(activityRange),
+    totalTasks,
+    totalPoints,
+    previousTotalTasks,
+    previousTotalPoints,
+    tasksDeltaPercent,
+    pointsDeltaPercent,
+    memberPeriodMetrics: members.map((member) => {
+      const memberTotals = memberMetricsByUserId.get(member.userId);
+      return {
+        userId: member.userId,
+        tasks: memberTotals?.tasks ?? 0,
+        points: memberTotals?.points ?? 0,
+      };
+    }),
+    topTasks,
+    recentCommunityActivities,
     presenceToday,
   };
 }

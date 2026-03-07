@@ -1,5 +1,6 @@
 export type MemberName = string;
 export type CommunityRoleKey = 'owner' | 'admin' | 'member';
+export type ActivityRange = 'week' | 'month';
 
 export interface Member {
   userId: string;
@@ -14,8 +15,34 @@ export interface Member {
 }
 
 export interface WeeklyActivity {
+  metricDate: string;
   day: string;
   [key: string]: string | number;
+}
+
+export interface MemberPeriodMetrics {
+  userId: string;
+  tasks: number;
+  points: number;
+}
+
+export interface TopTaskMetric {
+  taskId: string;
+  taskName: string;
+  categoryName: string;
+  tasks: number;
+  points: number;
+}
+
+export interface RecentCommunityActivity {
+  id: string;
+  memberUserId: string;
+  memberName: string;
+  taskName: string;
+  categoryName: string;
+  performedOn: string;
+  quantity: number;
+  pointsTotal: number;
 }
 
 export interface PresenceSummary {
@@ -37,5 +64,18 @@ export interface CommunityDashboardData {
   userCommunities: UserCommunitySummary[];
   members: Member[];
   weeklyActivities: WeeklyActivity[];
+  activityRange: ActivityRange;
+  activityRangeLabel: string;
+  activityMonthLabel: string;
+  previousRangeLabel: string;
+  totalTasks: number;
+  totalPoints: number;
+  previousTotalTasks: number;
+  previousTotalPoints: number;
+  tasksDeltaPercent: number | null;
+  pointsDeltaPercent: number | null;
+  memberPeriodMetrics: MemberPeriodMetrics[];
+  topTasks: TopTaskMetric[];
+  recentCommunityActivities: RecentCommunityActivity[];
   presenceToday: PresenceSummary | null;
 }

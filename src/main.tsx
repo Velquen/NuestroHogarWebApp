@@ -11,7 +11,7 @@ import {
 import App from './App';
 import './index.css';
 
-const QUERY_CACHE_STORAGE_KEY = 'nuestrohogar:react-query-cache:v1';
+const QUERY_CACHE_STORAGE_KEY = 'nuestrohogar:react-query-cache:v2';
 const QUERY_CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutos
 
 interface PersistedQueryCache {
