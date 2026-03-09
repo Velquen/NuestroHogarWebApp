@@ -77,13 +77,6 @@ interface AppToast {
   variant: ToastVariant;
 }
 
-interface RecentLogTone {
-  accent: string;
-  border: string;
-  chip: string;
-  soft: string;
-}
-
 interface TaskDropdownOption {
   value: string;
   label: string;
@@ -421,6 +414,15 @@ function TaskDropdown({
     });
   }, [activeIndex, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    setIsOpen(false);
+    setActiveIndex(-1);
+  }, [value]);
+
   const closeDropdown = () => {
     setIsOpen(false);
     setActiveIndex(-1);
@@ -451,8 +453,8 @@ function TaskDropdown({
       return;
     }
 
-    onChange(nextOption.value);
     closeDropdown();
+    onChange(nextOption.value);
     focusTrigger();
   };
 
@@ -2506,7 +2508,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               {isCommunitiesMenuOpen && (
                 <div
                   id="mis-comunidades-menu"
-                  className="absolute left-0 top-[calc(100%+0.55rem)] z-[70] w-[min(95vw,420px)] rounded-2xl border border-black/12 bg-[color:var(--card)] p-3 shadow-xl backdrop-blur-sm sm:p-4"
+                  className="absolute left-1/2 top-[calc(100%+0.55rem)] z-[70] w-[min(95vw,420px)] -translate-x-1/2 rounded-2xl border border-black/12 bg-[color:var(--card)] p-3 shadow-xl backdrop-blur-sm sm:left-0 sm:translate-x-0 sm:p-4"
                 >
                   <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/58">
                     Comunidades del usuario
@@ -2524,13 +2526,24 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       return (
                         <div
                           key={community.id}
-                          className="flex items-center gap-2 rounded-xl border border-black/10 bg-white/80 px-2 py-1.5 transition hover:border-black/20 hover:bg-white"
+                          className={`flex items-center gap-2 rounded-xl border px-2 py-1.5 transition ${
+                            isCommunityActive
+                              ? 'border-lime-200 bg-lime-50/45'
+                              : 'border-black/10 bg-white/80 hover:border-black/20 hover:bg-white'
+                          }`}
                         >
                           <button
                             type="button"
+                            disabled={isCommunityActive}
                             onClick={() => handleGoToCommunity(community.id)}
-                            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-1.5 py-1 text-left"
-                            aria-label={`Ir a la comunidad ${community.name}`}
+                            className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-1.5 py-1 text-left ${
+                              isCommunityActive ? 'cursor-default' : ''
+                            }`}
+                            aria-label={
+                              isCommunityActive
+                                ? `Comunidad activa ${community.name}`
+                                : `Ir a la comunidad ${community.name}`
+                            }
                           >
                             <p className="min-w-0 truncate text-sm font-semibold text-ink/85">
                               {community.name}
@@ -2625,7 +2638,10 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                 </div>
               )}
             </div>
-            <div ref={profileMenuRef} className="relative ml-auto flex items-center gap-2">
+            <div
+              ref={profileMenuRef}
+              className="relative flex w-full items-center justify-end gap-2 sm:ml-auto sm:w-auto"
+            >
               <button
                 type="button"
                 onClick={handleSignOut}
@@ -2668,7 +2684,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               {isProfileMenuOpen && (
                 <div
                   id="profile-menu"
-                  className="absolute right-0 top-[calc(100%+0.55rem)] z-[80] max-h-[85vh] w-[min(96vw,390px)] overflow-y-auto rounded-2xl border border-black/12 bg-[color:var(--card)] p-3 shadow-xl backdrop-blur-sm sm:p-4"
+                  className="absolute left-1/2 top-[calc(100%+0.55rem)] z-[80] max-h-[85vh] w-[min(96vw,390px)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-black/12 bg-[color:var(--card)] p-3 shadow-xl backdrop-blur-sm sm:left-auto sm:right-0 sm:translate-x-0 sm:p-4"
                 >
                   <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/55">Mi Perfil</p>
 
@@ -3074,6 +3090,200 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
           </div>
         </section>
 
+        <section id="resumen" className="panel animate-rise p-4 [animation-delay:160ms] sm:p-8">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">Resumen</h2>
+              <p className="text-sm text-ink/65">
+                Filtra por periodo y revisa el ritmo diario de tareas y puntos de la comunidad.
+              </p>
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
+              <div
+                role="tablist"
+                aria-label="Rango de actividades"
+                className="range-switch w-full sm:w-[220px]"
+              >
+                {activityRangeOptions.map((option) => {
+                  const isActive = activityRange === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      onClick={() => setActivityRange(option.value)}
+                      className={`range-switch-option ${isActive ? 'is-active' : ''}`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-[11px] uppercase tracking-[0.15em] text-ink/70">
+                  {data?.activityRangeLabel ?? 'Periodo'}
+                </span>
+                <span className="rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-[11px] uppercase tracking-[0.15em] text-ink/70">
+                  {data?.activityMonthLabel ?? 'Mes actual'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {isLoading && (
+            <div className="h-[280px] animate-pulse rounded-2xl border border-black/10 bg-white/60 sm:h-[360px]" />
+          )}
+
+          {!isLoading && !isError && data && (
+            <article className="rounded-2xl border border-black/10 bg-white/75 p-2 sm:p-4">
+              <div className="mb-3 flex flex-col items-start gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+                <p className="text-sm font-semibold uppercase tracking-[0.14em] text-ink/70">
+                  Ritmo diario y contribución
+                </p>
+                <p className="w-full text-[11px] leading-relaxed text-ink/58 sm:w-auto sm:text-xs">
+                  Día con mayor actividad: <strong>{busiestDay.day}</strong> ({busiestDay.total} tareas,{' '}
+                  {busiestDay.totalPoints} pts)
+                </p>
+              </div>
+              <div className="h-[300px] sm:h-[360px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart
+                    data={dailyOverview}
+                    barGap={0}
+                    barCategoryGap="30%"
+                    margin={{ top: 8, right: 4, bottom: 8, left: -8 }}
+                  >
+                    <CartesianGrid vertical={false} strokeDasharray="3 6" stroke="rgba(94, 74, 59, 0.2)" />
+                    <XAxis
+                      dataKey={isMobileViewport ? 'mobileDayLabel' : 'day'}
+                      tick={{ fill: '#5b4537', fontSize: 12, fontWeight: 600 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: 'rgba(91, 69, 55, 0.78)', fontSize: 10 }}
+                      axisLine={{ stroke: 'rgba(91, 69, 55, 0.36)', strokeWidth: 1 }}
+                      tickLine={false}
+                      width={14}
+                      mirror
+                      tickMargin={2}
+                      tickCount={5}
+                      allowDecimals={false}
+                    />
+                    <Tooltip
+                      shared={false}
+                      cursor={{ fill: 'rgba(128, 98, 76, 0.09)' }}
+                      wrapperStyle={{ outline: 'none' }}
+                      content={renderDailyMetricsTooltip}
+                    />
+                    {!isMobileViewport && (
+                      <Legend
+                        wrapperStyle={{
+                          fontSize: '11px',
+                          textTransform: 'uppercase',
+                          paddingTop: '8px',
+                        }}
+                      />
+                    )}
+
+                    {data.members.map((member) => (
+                      <Bar
+                        key={member.name}
+                        dataKey={getPointsKey(member.name)}
+                        name={member.name}
+                        fill={member.color}
+                        maxBarSize={28}
+                        radius={[7, 7, 0, 0]}
+                        shape={(shapeProps: unknown) => {
+                          const normalizedShapeProps = (shapeProps ?? {}) as {
+                            dataKey?: string;
+                            fill?: string;
+                            height?: number;
+                            payload?: Record<string, unknown>;
+                            width?: number;
+                            x?: number;
+                            y?: number;
+                          };
+                          const {
+                            x = 0,
+                            y = 0,
+                            width = 0,
+                            height = 0,
+                            fill = '#7a5b48',
+                            payload = {},
+                            dataKey = '',
+                          } = normalizedShapeProps;
+
+                          if (height <= 0 || width <= 0) {
+                            return <g />;
+                          }
+
+                          const key = String(dataKey);
+                          const taskKey = key.endsWith('__points')
+                            ? key.slice(0, -'__points'.length)
+                            : key;
+                          const points = Number(payload[key] ?? 0);
+                          const tasks = Number(payload[taskKey] ?? 0);
+                          const ratio = points > 0 ? Math.min(tasks / points, 1) : 0;
+                          const innerHeight = Math.max(height * ratio, tasks > 0 ? 3 : 0);
+                          const innerWidth = Math.max(width * 0.5, 4);
+                          const innerX = x + (width - innerWidth) / 2;
+                          const innerY = y + (height - innerHeight);
+
+                          return (
+                            <g>
+                              <rect
+                                x={x}
+                                y={y}
+                                width={width}
+                                height={height}
+                                rx={6}
+                                ry={6}
+                                fill={hexToRgba(fill, 0.42)}
+                                onMouseEnter={() => setBarHoverMetric('points')}
+                                onClick={() => setBarHoverMetric('points')}
+                              />
+                              <rect
+                                x={innerX}
+                                y={innerY}
+                                width={innerWidth}
+                                height={innerHeight}
+                                rx={4}
+                                ry={4}
+                                fill={hexToRgba(fill, 0.92)}
+                                onMouseEnter={() => setBarHoverMetric('tasks')}
+                                onMouseLeave={() => setBarHoverMetric('points')}
+                                onClick={() => setBarHoverMetric('tasks')}
+                              />
+                            </g>
+                          );
+                        }}
+                      />
+                    ))}
+
+                    <Line
+                      type="monotone"
+                      dataKey="totalPoints"
+                      name="Total diario (pts)"
+                      stroke="#51392d"
+                      strokeWidth={2.5}
+                      dot={{ r: 3, strokeWidth: 1, fill: '#ffffff' }}
+                      activeDot={{ r: 5 }}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </article>
+          )}
+
+          {isError && (
+            <p className="rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-700">
+              No fue posible cargar el resumen.
+            </p>
+          )}
+        </section>
+
         <section id="integrantes" className="panel animate-rise p-4 [animation-delay:180ms] sm:p-8">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">Integrantes</h2>
@@ -3381,50 +3591,13 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
           id="actividades-semanales"
           className="panel animate-rise p-4 [animation-delay:300ms] sm:p-8"
         >
-          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">
-                Actividades y métricas
-              </h2>
-              <p className="text-sm text-ink/65">
-                Filtra por periodo y compara tareas y puntos por integrante.
-              </p>
-            </div>
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
-              <div
-                role="tablist"
-                aria-label="Rango de actividades"
-                className="grid w-full grid-cols-2 rounded-xl border border-black/10 bg-white/70 p-1 sm:w-[220px]"
-              >
-                {activityRangeOptions.map((option) => {
-                  const isActive = activityRange === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="tab"
-                      aria-selected={isActive}
-                      onClick={() => setActivityRange(option.value)}
-                      className={`rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] transition ${
-                        isActive
-                          ? 'bg-[#8a5a3f] text-white shadow-[0_8px_18px_-10px_rgba(72,43,23,0.55)]'
-                          : 'text-ink/70 hover:bg-black/5'
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className="rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-[11px] uppercase tracking-[0.15em] text-ink/70">
-                  {data?.activityRangeLabel ?? 'Periodo'}
-                </span>
-                <span className="rounded-full border border-black/15 bg-white/75 px-3 py-1 text-center text-[11px] uppercase tracking-[0.15em] text-ink/70">
-                  {data?.activityMonthLabel ?? 'Mes actual'}
-                </span>
-              </div>
-            </div>
+          <div className="mb-5">
+            <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">
+              Actividades y métricas
+            </h2>
+            <p className="text-sm text-ink/65">
+              Compara tareas y puntos por integrante para el periodo seleccionado.
+            </p>
           </div>
 
           {isLoading && (
@@ -3444,149 +3617,6 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
           {!isLoading && !isError && data && (
             <div className="space-y-4">
               <div className="space-y-4">
-                <article className="rounded-2xl border border-black/10 bg-white/75 p-2 sm:p-4">
-                  <div className="mb-3 flex flex-col items-start gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-                    <p className="text-sm font-semibold uppercase tracking-[0.14em] text-ink/70">
-                      Ritmo diario y contribución
-                    </p>
-                    <p className="w-full text-[11px] leading-relaxed text-ink/58 sm:w-auto sm:text-xs">
-                      Día con mayor actividad: <strong>{busiestDay.day}</strong> ({busiestDay.total} tareas, {busiestDay.totalPoints} pts)
-                    </p>
-                  </div>
-                  <div className="h-[300px] sm:h-[360px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart
-                        data={dailyOverview}
-                        barGap={0}
-                        barCategoryGap="30%"
-                        margin={{ top: 8, right: 4, bottom: 8, left: -8 }}
-                      >
-                        <CartesianGrid
-                          vertical={false}
-                          strokeDasharray="3 6"
-                          stroke="rgba(94, 74, 59, 0.2)"
-                        />
-                        <XAxis
-                          dataKey={isMobileViewport ? 'mobileDayLabel' : 'day'}
-                          tick={{ fill: '#5b4537', fontSize: 12, fontWeight: 600 }}
-                          axisLine={false}
-                          tickLine={false}
-                        />
-                        <YAxis
-                          tick={{ fill: 'rgba(91, 69, 55, 0.78)', fontSize: 10 }}
-                          axisLine={{ stroke: 'rgba(91, 69, 55, 0.36)', strokeWidth: 1 }}
-                          tickLine={false}
-                          width={14}
-                          mirror
-                          tickMargin={2}
-                          tickCount={5}
-                          allowDecimals={false}
-                        />
-                        <Tooltip
-                          shared={false}
-                          cursor={{ fill: 'rgba(128, 98, 76, 0.09)' }}
-                          wrapperStyle={{ outline: 'none' }}
-                          content={renderDailyMetricsTooltip}
-                        />
-                        {!isMobileViewport && (
-                          <Legend
-                            wrapperStyle={{
-                              fontSize: '11px',
-                              textTransform: 'uppercase',
-                              paddingTop: '8px',
-                            }}
-                          />
-                        )}
-
-                        {data.members.map((member) => (
-                          <Bar
-                            key={member.name}
-                            dataKey={getPointsKey(member.name)}
-                            name={member.name}
-                            fill={member.color}
-                            maxBarSize={28}
-                            radius={[7, 7, 0, 0]}
-                            shape={(shapeProps: unknown) => {
-                              const normalizedShapeProps = (shapeProps ?? {}) as {
-                                dataKey?: string;
-                                fill?: string;
-                                height?: number;
-                                payload?: Record<string, unknown>;
-                                width?: number;
-                                x?: number;
-                                y?: number;
-                              };
-                              const {
-                                x = 0,
-                                y = 0,
-                                width = 0,
-                                height = 0,
-                                fill = '#7a5b48',
-                                payload = {},
-                                dataKey = '',
-                              } = normalizedShapeProps;
-
-                              if (height <= 0 || width <= 0) {
-                                return <g />;
-                              }
-
-                              const key = String(dataKey);
-                              const taskKey = key.endsWith('__points')
-                                ? key.slice(0, -'__points'.length)
-                                : key;
-                              const points = Number(payload[key] ?? 0);
-                              const tasks = Number(payload[taskKey] ?? 0);
-                              const ratio = points > 0 ? Math.min(tasks / points, 1) : 0;
-                              const innerHeight = Math.max(height * ratio, tasks > 0 ? 3 : 0);
-                              const innerWidth = Math.max(width * 0.5, 4);
-                              const innerX = x + (width - innerWidth) / 2;
-                              const innerY = y + (height - innerHeight);
-
-                              return (
-                                <g>
-                                  <rect
-                                    x={x}
-                                    y={y}
-                                    width={width}
-                                    height={height}
-                                    rx={6}
-                                    ry={6}
-                                    fill={hexToRgba(fill, 0.42)}
-                                    onMouseEnter={() => setBarHoverMetric('points')}
-                                    onClick={() => setBarHoverMetric('points')}
-                                  />
-                                  <rect
-                                    x={innerX}
-                                    y={innerY}
-                                    width={innerWidth}
-                                    height={innerHeight}
-                                    rx={4}
-                                    ry={4}
-                                    fill={hexToRgba(fill, 0.92)}
-                                    onMouseEnter={() => setBarHoverMetric('tasks')}
-                                    onMouseLeave={() => setBarHoverMetric('points')}
-                                    onClick={() => setBarHoverMetric('tasks')}
-                                  />
-                                </g>
-                              );
-                            }}
-                          />
-                        ))}
-
-                        <Line
-                          type="monotone"
-                          dataKey="totalPoints"
-                          name="Total diario (pts)"
-                          stroke="#51392d"
-                          strokeWidth={2.5}
-                          dot={{ r: 3, strokeWidth: 1, fill: '#ffffff' }}
-                          activeDot={{ r: 5 }}
-                        />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                </article>
-
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                   <article className="dashboard-card">
                     <p className="metric-label">Tareas totales</p>
@@ -4165,31 +4195,11 @@ function getRecentLogMomentLabel(dateValue: string): string {
 }
 
 function getRecentLogStyle(categoryName: string): CSSProperties {
-  const palettes: RecentLogTone[] = [
-    {
-      accent: 'oklch(0.658 0.118 47)',
-      border: 'rgba(177, 103, 70, 0.2)',
-      chip: 'rgba(255, 247, 240, 0.92)',
-      soft: 'rgba(250, 236, 226, 0.9)',
-    },
-    {
-      accent: 'oklch(0.675 0.074 149)',
-      border: 'rgba(112, 142, 94, 0.22)',
-      chip: 'rgba(245, 251, 243, 0.92)',
-      soft: 'rgba(228, 241, 223, 0.9)',
-    },
-    {
-      accent: 'oklch(0.735 0.088 84)',
-      border: 'rgba(176, 146, 78, 0.22)',
-      chip: 'rgba(255, 250, 235, 0.92)',
-      soft: 'rgba(247, 239, 211, 0.9)',
-    },
-    {
-      accent: 'oklch(0.604 0.112 28)',
-      border: 'rgba(170, 92, 82, 0.22)',
-      chip: 'rgba(255, 244, 242, 0.92)',
-      soft: 'rgba(247, 226, 223, 0.9)',
-    },
+  const palettes = [
+    'color-mix(in oklab, var(--primary) 86%, var(--secondary))',
+    'color-mix(in oklab, var(--accent) 78%, var(--secondary))',
+    'color-mix(in oklab, var(--secondary) 70%, var(--foreground))',
+    'color-mix(in oklab, var(--primary) 66%, var(--accent))',
   ];
 
   const normalized = categoryName
@@ -4197,13 +4207,10 @@ function getRecentLogStyle(categoryName: string): CSSProperties {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
   const hash = Array.from(normalized).reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const tone = palettes[hash % palettes.length];
+  const accent = palettes[hash % palettes.length];
 
   return {
-    '--recent-log-accent': tone.accent,
-    '--recent-log-border': tone.border,
-    '--recent-log-chip': tone.chip,
-    '--recent-log-soft': tone.soft,
+    '--recent-log-accent': accent,
   } as CSSProperties;
 }
 
