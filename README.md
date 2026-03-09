@@ -22,3 +22,7 @@ npm run dev
 npm run build
 npm run preview
 ```
+
+## Deploy con Docker en VPS
+
+La guía operativa está en [implementacion-docker.md](./implementacion-docker.md).
