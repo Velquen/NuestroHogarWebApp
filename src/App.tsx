@@ -1,4 +1,5 @@
 import {
+  useCallback,
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -63,9 +64,12 @@ const activityRangeOptions: { value: ActivityRange; label: string }[] = [
   { value: 'month', label: 'Mes' },
 ];
 const THEME_STORAGE_KEY = 'nuestrohogar:theme-mode:v1';
+const THEME_TRANSITION_MS = 220;
+const DEFAULT_PROFILE_COLOR = '#8b6a52';
 
 type ToastVariant = 'success' | 'error';
 type ThemeMode = 'light' | 'dark' | 'system';
+type ThemeTransitionOrigin = { x: number; y: number };
 
 interface AppToast {
   id: string;
@@ -99,6 +103,31 @@ interface TaskDropdownProps {
   selectedChip?: ReactNode;
   value: string;
   variant?: 'default' | 'score';
+}
+
+interface DailyChartTooltipPayloadItem {
+  payload?: DailyOverviewRow;
+}
+
+interface DailyChartTooltipProps {
+  active?: boolean;
+  label?: string | number;
+  payload?: DailyChartTooltipPayloadItem[];
+}
+
+interface DonutChartDatum {
+  color: string;
+  name: string;
+  value: number;
+}
+
+interface DonutChartTooltipPayloadItem {
+  payload?: DonutChartDatum;
+}
+
+interface DonutChartTooltipProps {
+  active?: boolean;
+  payload?: DonutChartTooltipPayloadItem[];
 }
 
 type AuthMode = 'sign-in' | 'sign-up';
@@ -147,6 +176,113 @@ const getScoreBadgeClass = (score: number) =>
 
 function getPointsKey(memberName: string): string {
   return `${memberName}__points`;
+}
+
+function isHexColor(value: string): boolean {
+  return /^#([0-9a-fA-F]{6})$/.test(value);
+}
+
+function normalizeHexColor(value: string): string | null {
+  const trimmed = value.trim();
+  const withHash = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
+  if (!isHexColor(withHash)) {
+    return null;
+  }
+
+  return withHash.toLowerCase();
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const normalized = normalizeHexColor(hex);
+  if (!normalized) {
+    return null;
+  }
+
+  return {
+    r: Number.parseInt(normalized.slice(1, 3), 16),
+    g: Number.parseInt(normalized.slice(3, 5), 16),
+    b: Number.parseInt(normalized.slice(5, 7), 16),
+  };
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const toHex = (value: number) => clamp(Math.round(value), 0, 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function rgbToHsv(r: number, g: number, b: number): { h: number; s: number; v: number } {
+  const red = r / 255;
+  const green = g / 255;
+  const blue = b / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+
+  let hue = 0;
+  if (delta > 0) {
+    if (max === red) {
+      hue = ((green - blue) / delta + (green < blue ? 6 : 0)) * 60;
+    } else if (max === green) {
+      hue = ((blue - red) / delta + 2) * 60;
+    } else {
+      hue = ((red - green) / delta + 4) * 60;
+    }
+  }
+
+  const saturation = max === 0 ? 0 : delta / max;
+  return {
+    h: hue,
+    s: saturation,
+    v: max,
+  };
+}
+
+function hsvToRgb(h: number, s: number, v: number): { r: number; g: number; b: number } {
+  const hue = ((h % 360) + 360) % 360;
+  const saturation = clamp(s, 0, 1);
+  const value = clamp(v, 0, 1);
+  const chroma = value * saturation;
+  const x = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = value - chroma;
+
+  let rPrime = 0;
+  let gPrime = 0;
+  let bPrime = 0;
+
+  if (hue < 60) {
+    rPrime = chroma;
+    gPrime = x;
+  } else if (hue < 120) {
+    rPrime = x;
+    gPrime = chroma;
+  } else if (hue < 180) {
+    gPrime = chroma;
+    bPrime = x;
+  } else if (hue < 240) {
+    gPrime = x;
+    bPrime = chroma;
+  } else if (hue < 300) {
+    rPrime = x;
+    bPrime = chroma;
+  } else {
+    rPrime = chroma;
+    bPrime = x;
+  }
+
+  return {
+    r: (rPrime + m) * 255,
+    g: (gPrime + m) * 255,
+    b: (bPrime + m) * 255,
+  };
+}
+
+function hsvToHex(h: number, s: number, v: number): string {
+  const { r, g, b } = hsvToRgb(h, s, v);
+  return rgbToHex(r, g, b);
 }
 
 function toMobileDayLabel(metricDate: string): string {
@@ -527,6 +663,136 @@ function TaskDropdown({
   );
 }
 
+interface PhotoshopColorPickerProps {
+  onChange: (hex: string) => void;
+  value: string;
+}
+
+function PhotoshopColorPicker({ onChange, value }: PhotoshopColorPickerProps) {
+  const squareRef = useRef<HTMLDivElement | null>(null);
+
+  const hsv = useMemo(() => {
+    const rgb = hexToRgb(value) ?? hexToRgb(DEFAULT_PROFILE_COLOR);
+    if (!rgb) {
+      return { h: 24, s: 0.41, v: 0.55 };
+    }
+    return rgbToHsv(rgb.r, rgb.g, rgb.b);
+  }, [value]);
+  const [hexInput, setHexInput] = useState(value.toUpperCase());
+
+  useEffect(() => {
+    setHexInput(value.toUpperCase());
+  }, [value]);
+
+  const syncSvFromPointer = useCallback(
+    (clientX: number, clientY: number, target: HTMLDivElement) => {
+      const bounds = target.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) {
+        return;
+      }
+
+      const saturation = clamp((clientX - bounds.left) / bounds.width, 0, 1);
+      const brightness = 1 - clamp((clientY - bounds.top) / bounds.height, 0, 1);
+      onChange(hsvToHex(hsv.h, saturation, brightness));
+    },
+    [hsv.h, onChange],
+  );
+
+  return (
+    <div className="space-y-3 rounded-xl border border-black/10 bg-white/75 p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink/60">
+          Color Picker
+        </span>
+        <span
+          className="inline-flex h-7 w-10 rounded-md border border-black/15 shadow-inner"
+          style={{ backgroundColor: value }}
+          aria-hidden
+        />
+      </div>
+
+      <div
+        ref={squareRef}
+        role="slider"
+        aria-label="Saturación y brillo"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(hsv.s * 100)}
+        className="relative h-36 w-full cursor-crosshair overflow-hidden rounded-lg border border-black/20"
+        style={{
+          backgroundImage: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, hsl(${Math.round(hsv.h)} 100% 50%))`,
+        }}
+        onPointerDown={(event) => {
+          if (!squareRef.current) {
+            return;
+          }
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          syncSvFromPointer(event.clientX, event.clientY, squareRef.current);
+        }}
+        onPointerMove={(event) => {
+          if (!squareRef.current || !event.currentTarget.hasPointerCapture(event.pointerId)) {
+            return;
+          }
+          syncSvFromPointer(event.clientX, event.clientY, squareRef.current);
+        }}
+      >
+        <span
+          className="pointer-events-none absolute h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-transparent shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
+          style={{
+            left: `${hsv.s * 100}%`,
+            top: `${(1 - hsv.v) * 100}%`,
+          }}
+          aria-hidden
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-[10px] font-semibold uppercase tracking-[0.11em] text-ink/60">
+          Matiz
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={360}
+          value={Math.round(hsv.h)}
+          onChange={(event) => {
+            const nextHue = clamp(Number(event.target.value), 0, 360);
+            onChange(hsvToHex(nextHue, hsv.s, hsv.v));
+          }}
+          className="h-3 w-full cursor-pointer appearance-none rounded-full border border-black/15"
+          style={{
+            background:
+              'linear-gradient(90deg, #ff0000 0%, #ffff00 16.6%, #00ff00 33.3%, #00ffff 50%, #0000ff 66.6%, #ff00ff 83.3%, #ff0000 100%)',
+          }}
+        />
+      </div>
+
+      <label className="block space-y-1">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.11em] text-ink/60">Hex</span>
+        <input
+          type="text"
+          value={hexInput}
+          maxLength={7}
+          className="w-full rounded-lg border border-black/12 bg-white px-3 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-ink outline-none transition focus:border-black/30"
+          onChange={(event) => {
+            const nextValue = event.target.value.toUpperCase();
+            setHexInput(nextValue);
+            const normalized = normalizeHexColor(nextValue);
+            if (normalized) {
+              onChange(normalized);
+            }
+          }}
+          onBlur={() => {
+            const normalized = normalizeHexColor(hexInput);
+            setHexInput((normalized ?? value).toUpperCase());
+          }}
+        />
+      </label>
+    </div>
+  );
+}
+
 function App() {
   const queryClient = useQueryClient();
   const [session, setSession] = useState<Session | null>(null);
@@ -539,6 +805,10 @@ function App() {
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 640 : false,
   );
+  const themeToggleRef = useRef<HTMLButtonElement | null>(null);
+  const themeTransitionTimeoutRef = useRef<number | null>(null);
+  const hasAppliedInitialThemeRef = useRef(false);
+  const themeTransitionOriginRef = useRef<ThemeTransitionOrigin | null>(null);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authMode, setAuthMode] = useState<AuthMode>('sign-in');
@@ -616,7 +886,73 @@ function App() {
     [themeMode, systemPrefersDark],
   );
 
+  const applyResolvedTheme = useCallback(
+    (nextTheme: 'light' | 'dark', animate: boolean, origin?: ThemeTransitionOrigin) => {
+      if (typeof document === 'undefined') {
+        return;
+      }
+
+      const root = document.documentElement;
+
+      const clearPendingTimeout = () => {
+        if (themeTransitionTimeoutRef.current === null || typeof window === 'undefined') {
+          return;
+        }
+
+        window.clearTimeout(themeTransitionTimeoutRef.current);
+        themeTransitionTimeoutRef.current = null;
+      };
+
+      const applyImmediately = () => {
+        clearPendingTimeout();
+        root.classList.remove('theme-transitioning');
+        root.classList.toggle('dark', nextTheme === 'dark');
+      };
+
+      if (
+        !animate ||
+        typeof window === 'undefined' ||
+        (typeof window.matchMedia === 'function' &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+      ) {
+        applyImmediately();
+        return;
+      }
+
+      const fallbackX = Math.round(window.innerWidth * 0.5);
+      const fallbackY = Math.round(window.innerHeight * 0.24);
+      const originX = origin ? Math.round(origin.x) : fallbackX;
+      const originY = origin ? Math.round(origin.y) : fallbackY;
+
+      root.style.setProperty('--theme-transition-ms', `${THEME_TRANSITION_MS}ms`);
+      root.style.setProperty('--theme-origin-x', `${originX}px`);
+      root.style.setProperty('--theme-origin-y', `${originY}px`);
+      root.classList.add('theme-transitioning');
+
+      clearPendingTimeout();
+      window.requestAnimationFrame(() => {
+        root.classList.toggle('dark', nextTheme === 'dark');
+      });
+
+      themeTransitionTimeoutRef.current = window.setTimeout(() => {
+        root.classList.remove('theme-transitioning');
+        themeTransitionTimeoutRef.current = null;
+      }, THEME_TRANSITION_MS);
+    },
+    [],
+  );
+
   const handleThemeSwitch = () => {
+    if (themeToggleRef.current) {
+      const bounds = themeToggleRef.current.getBoundingClientRect();
+      themeTransitionOriginRef.current = {
+        x: bounds.left + bounds.width / 2,
+        y: bounds.top + bounds.height / 2,
+      };
+    } else {
+      themeTransitionOriginRef.current = null;
+    }
+
     setThemeMode((previous) => {
       if (previous === 'system') {
         return systemPrefersDark ? 'light' : 'dark';
@@ -627,12 +963,21 @@ function App() {
   };
 
   useEffect(() => {
-    if (typeof document === 'undefined') {
-      return;
-    }
+    const shouldAnimate = hasAppliedInitialThemeRef.current;
+    const nextOrigin = themeTransitionOriginRef.current ?? undefined;
+    applyResolvedTheme(resolvedTheme, shouldAnimate, nextOrigin);
+    themeTransitionOriginRef.current = null;
+    hasAppliedInitialThemeRef.current = true;
+  }, [applyResolvedTheme, resolvedTheme]);
 
-    document.documentElement.classList.toggle('dark', resolvedTheme === 'dark');
-  }, [resolvedTheme]);
+  useEffect(() => {
+    return () => {
+      if (themeTransitionTimeoutRef.current !== null && typeof window !== 'undefined') {
+        window.clearTimeout(themeTransitionTimeoutRef.current);
+        themeTransitionTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -798,7 +1143,9 @@ function App() {
   const [isCommunitiesMenuOpen, setIsCommunitiesMenuOpen] = useState(false);
   const [profileAliasDraft, setProfileAliasDraft] = useState('');
   const [profileIconDraft, setProfileIconDraft] = useState<ProfileAvatarIconKey>('leaf_svg');
+  const [profileColorDraft, setProfileColorDraft] = useState(DEFAULT_PROFILE_COLOR);
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [newCommunityName, setNewCommunityName] = useState('');
   const [isCreateCommunityOpen, setIsCreateCommunityOpen] = useState(false);
@@ -877,8 +1224,136 @@ function App() {
     });
   }, [data, weeklyActivities]);
 
+  const renderDailyMetricsTooltip = useCallback(
+    ({ active, label, payload }: DailyChartTooltipProps) => {
+      if (!active || !payload?.length || !data) {
+        return null;
+      }
+
+      const row = payload[0]?.payload;
+      if (!row) {
+        return null;
+      }
+
+      const isTasksMetric = barHoverMetric === 'tasks';
+      const totalValue = isTasksMetric ? row.total : row.totalPoints;
+      const totalLabel = isTasksMetric ? `${totalValue} tareas` : `${totalValue} pts`;
+
+      return (
+        <div className="min-w-[190px] rounded-2xl border border-[#715948]/20 bg-[#fffaf4]/95 px-3.5 py-3 shadow-[0_16px_40px_-24px_rgba(84,61,45,0.5)] backdrop-blur-[2px]">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7d6655]">
+            {String(label ?? row.day)}
+          </p>
+
+          <div className="space-y-1.5">
+            {data.members.map((member) => {
+              const tasks = Number(row[member.name] ?? 0);
+              const points = Number(row[getPointsKey(member.name)] ?? 0);
+              const metricValue = isTasksMetric ? `${tasks} tareas` : `${points} pts`;
+
+              return (
+                <div key={member.userId} className="flex items-center justify-between gap-3 text-[13px]">
+                  <span className="flex items-center gap-2 font-medium text-[#4e3d31]">
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ backgroundColor: member.color }}
+                      aria-hidden
+                    />
+                    {member.name}
+                  </span>
+                  <span className="font-semibold text-[#5c4738]">{metricValue}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-2.5 border-t border-[#6d5342]/14 pt-2 text-[13px] font-semibold text-[#4b3b30]">
+            Total diario: {totalLabel}
+          </div>
+        </div>
+      );
+    },
+    [barHoverMetric, data],
+  );
+
   const weeklyTotal = data?.totalTasks ?? 0;
   const weeklyPointsTotal = data?.totalPoints ?? 0;
+
+  const renderTasksDistributionTooltip = useCallback(
+    ({ active, payload }: DonutChartTooltipProps) => {
+      if (!active || !payload?.length) {
+        return null;
+      }
+
+      const entry = payload[0]?.payload;
+      if (!entry) {
+        return null;
+      }
+
+      const hasRealData = weeklyTotal > 0;
+      const share = hasRealData ? Math.round((entry.value / weeklyTotal) * 100) : 0;
+
+      return (
+        <div className="min-w-[168px] rounded-2xl border border-[#6b5545]/20 bg-[#fffaf4]/95 px-3 py-2.5 shadow-[0_14px_34px_-24px_rgba(84,61,45,0.48)]">
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 text-[13px] font-medium text-[#4f3d31]">
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: entry.color }}
+                aria-hidden
+              />
+              {entry.name}
+            </span>
+            <span className="text-[14px] font-semibold tabular-nums text-[#3f3128]">
+              {hasRealData ? `${entry.value}` : '0'}
+            </span>
+          </div>
+          <p className="mt-1.5 text-[11px] uppercase tracking-[0.11em] text-[#7c6656]">
+            {hasRealData ? `${share}% del total` : 'Sin actividad en el periodo'}
+          </p>
+        </div>
+      );
+    },
+    [weeklyTotal],
+  );
+
+  const renderPointsDistributionTooltip = useCallback(
+    ({ active, payload }: DonutChartTooltipProps) => {
+      if (!active || !payload?.length) {
+        return null;
+      }
+
+      const entry = payload[0]?.payload;
+      if (!entry) {
+        return null;
+      }
+
+      const hasRealData = weeklyPointsTotal > 0;
+      const share = hasRealData ? Math.round((entry.value / weeklyPointsTotal) * 100) : 0;
+
+      return (
+        <div className="min-w-[168px] rounded-2xl border border-[#6b5545]/20 bg-[#fffaf4]/95 px-3 py-2.5 shadow-[0_14px_34px_-24px_rgba(84,61,45,0.48)]">
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 text-[13px] font-medium text-[#4f3d31]">
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: entry.color }}
+                aria-hidden
+              />
+              {entry.name}
+            </span>
+            <span className="text-[14px] font-semibold tabular-nums text-[#3f3128]">
+              {hasRealData ? `${entry.value} pts` : '0 pts'}
+            </span>
+          </div>
+          <p className="mt-1.5 text-[11px] uppercase tracking-[0.11em] text-[#7c6656]">
+            {hasRealData ? `${share}% del total` : 'Sin puntos en el periodo'}
+          </p>
+        </div>
+      );
+    },
+    [weeklyPointsTotal],
+  );
 
   const topMember = useMemo(() => {
     if (!totalsByMember.length) {
@@ -952,7 +1427,10 @@ function App() {
     setProfileAliasDraft(profileMember.alias ?? profileMember.baseName);
     const nextIcon = profileMember.avatarIconKey;
     setProfileIconDraft(nextIcon && isValidProfileIconKey(nextIcon) ? nextIcon : 'leaf_svg');
+    const normalizedColor = normalizeHexColor(profileMember.color) ?? DEFAULT_PROFILE_COLOR;
+    setProfileColorDraft(normalizedColor);
     setIsIconPickerOpen(false);
+    setIsColorPickerOpen(false);
   }, [profileMember]);
 
   useEffect(() => {
@@ -1141,6 +1619,7 @@ function App() {
       if (isProfileMenuOpen && profileMenuRef.current && !profileMenuRef.current.contains(target)) {
         setIsProfileMenuOpen(false);
         setIsIconPickerOpen(false);
+        setIsColorPickerOpen(false);
         setIsCreateCommunityOpen(false);
         setIsCreateCommunityConfirmOpen(false);
       }
@@ -1164,6 +1643,7 @@ function App() {
       if (isProfileMenuOpen) {
         setIsProfileMenuOpen(false);
         setIsIconPickerOpen(false);
+        setIsColorPickerOpen(false);
         setIsCreateCommunityOpen(false);
         setIsCreateCommunityConfirmOpen(false);
       }
@@ -1383,15 +1863,23 @@ function App() {
       return;
     }
 
+    const normalizedColor = normalizeHexColor(profileColorDraft);
+    if (!normalizedColor) {
+      showToast('El color debe estar en formato HEX, por ejemplo #8b6a52.', 'error');
+      return;
+    }
+
     setIsSavingProfile(true);
     try {
       await updateMyProfileSettings({
         alias: trimmedAlias.length > 0 ? trimmedAlias : null,
         avatarIconKey: profileIconDraft,
+        avatarColor: normalizedColor,
       });
       await queryClient.invalidateQueries({ queryKey: ['community-dashboard'] });
       setIsProfileMenuOpen(false);
       setIsIconPickerOpen(false);
+      setIsColorPickerOpen(false);
       setIsCreateCommunityOpen(false);
       setIsCreateCommunityConfirmOpen(false);
       showToast('Perfil actualizado.');
@@ -1539,6 +2027,7 @@ function App() {
     setIsCommunitiesMenuOpen(false);
     setIsProfileMenuOpen(false);
     setIsIconPickerOpen(false);
+    setIsColorPickerOpen(false);
     setNewCommunityName('');
     setInviteLinkValue(null);
     setInviteLinkExpiresAt(null);
@@ -1990,6 +2479,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   if (isProfileMenuOpen) {
                     setIsProfileMenuOpen(false);
                     setIsIconPickerOpen(false);
+                    setIsColorPickerOpen(false);
                     setIsCreateCommunityOpen(false);
                     setIsCreateCommunityConfirmOpen(false);
                   }
@@ -2150,6 +2640,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                   setIsProfileMenuOpen((previous) => {
                     if (previous) {
                       setIsIconPickerOpen(false);
+                      setIsColorPickerOpen(false);
                       setIsCreateCommunityOpen(false);
                       setIsCreateCommunityConfirmOpen(false);
                     } else {
@@ -2167,7 +2658,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               >
                 <span
                   className="flex h-14 w-14 items-center justify-center rounded-full border border-white/55 bg-white/22 text-[22px] font-semibold text-white shadow-sm sm:h-16 sm:w-16"
-                  style={{ backgroundColor: profileMember?.color ?? '#8b6a52' }}
+                  style={{ backgroundColor: profileMember?.color ?? DEFAULT_PROFILE_COLOR }}
                   aria-hidden
                 >
                   {renderProfileIcon(profileMember?.avatarIconKey, 'h-9 w-9 rounded-lg object-cover text-white')}
@@ -2183,6 +2674,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
                   <div className="mt-3 flex items-center justify-center">
                     <button
+                      ref={themeToggleRef}
                       type="button"
                       className={`theme-toggle ${resolvedTheme === 'dark' ? 'is-dark' : 'is-light'}`}
                       role="switch"
@@ -2192,7 +2684,15 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     >
                       <span className="theme-toggle-track" aria-hidden />
                       <span className="theme-toggle-thumb" aria-hidden>
-                        {resolvedTheme === 'dark' ? (
+                        <span className="theme-toggle-icon theme-toggle-icon--sun" aria-hidden>
+                          <svg viewBox="0 0 24 24" className="h-4 w-4">
+                            <path
+                              fill="currentColor"
+                              d="M12 4.25a.75.75 0 0 1 .75.75v1.8a.75.75 0 0 1-1.5 0V5a.75.75 0 0 1 .75-.75Zm0 12.95a.75.75 0 0 1 .75.75v1.8a.75.75 0 0 1-1.5 0v-1.8a.75.75 0 0 1 .75-.75Zm7.75-5.2a.75.75 0 0 1 .75.75a.75.75 0 0 1-.75.75h-1.8a.75.75 0 0 1 0-1.5h1.8Zm-13.95 0a.75.75 0 0 1 .75.75a.75.75 0 0 1-.75.75H4a.75.75 0 0 1 0-1.5h1.8Zm9.3-5.7a.75.75 0 0 1 1.06 0l1.27 1.27a.75.75 0 0 1-1.06 1.06L15.1 7.36a.75.75 0 0 1 0-1.06Zm-7.53 7.53a.75.75 0 0 1 1.06 0l1.27 1.27a.75.75 0 1 1-1.06 1.06L7.57 14.9a.75.75 0 0 1 0-1.06Zm8.8 1.27a.75.75 0 1 1 1.06 1.06l-1.27 1.27a.75.75 0 1 1-1.06-1.06l1.27-1.27Zm-7.53-7.53a.75.75 0 1 1 1.06 1.06L8.63 9.9a.75.75 0 1 1-1.06-1.06l1.27-1.27ZM12 8.25a3.75 3.75 0 1 1 0 7.5a3.75 3.75 0 0 1 0-7.5Z"
+                            />
+                          </svg>
+                        </span>
+                        <span className="theme-toggle-icon theme-toggle-icon--moon" aria-hidden>
                           <svg viewBox="0 0 24 24" className="h-4 w-4">
                             <path
                               fill="currentColor"
@@ -2203,14 +2703,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                               d="M18.1 6.35a.75.75 0 0 1 .9-.13l.1.08l.08.1l.31.52l.53.31a.75.75 0 0 1 .13.9l-.08.1l-.1.08l-.52.31l-.31.53a.75.75 0 0 1-.9.13l-.1-.08l-.08-.1l-.31-.53l-.52-.31a.75.75 0 0 1-.13-.9l.08-.1l.1-.08l.52-.31l.31-.52Z"
                             />
                           </svg>
-                        ) : (
-                          <svg viewBox="0 0 24 24" className="h-4 w-4">
-                            <path
-                              fill="currentColor"
-                              d="M12 4.25a.75.75 0 0 1 .75.75v1.8a.75.75 0 0 1-1.5 0V5a.75.75 0 0 1 .75-.75Zm0 12.95a.75.75 0 0 1 .75.75v1.8a.75.75 0 0 1-1.5 0v-1.8a.75.75 0 0 1 .75-.75Zm7.75-5.2a.75.75 0 0 1 .75.75a.75.75 0 0 1-.75.75h-1.8a.75.75 0 0 1 0-1.5h1.8Zm-13.95 0a.75.75 0 0 1 .75.75a.75.75 0 0 1-.75.75H4a.75.75 0 0 1 0-1.5h1.8Zm9.3-5.7a.75.75 0 0 1 1.06 0l1.27 1.27a.75.75 0 0 1-1.06 1.06L15.1 7.36a.75.75 0 0 1 0-1.06Zm-7.53 7.53a.75.75 0 0 1 1.06 0l1.27 1.27a.75.75 0 1 1-1.06 1.06L7.57 14.9a.75.75 0 0 1 0-1.06Zm8.8 1.27a.75.75 0 1 1 1.06 1.06l-1.27 1.27a.75.75 0 1 1-1.06-1.06l1.27-1.27Zm-7.53-7.53a.75.75 0 1 1 1.06 1.06L8.63 9.9a.75.75 0 1 1-1.06-1.06l1.27-1.27ZM12 8.25a3.75 3.75 0 1 1 0 7.5a3.75 3.75 0 0 1 0-7.5Z"
-                            />
-                          </svg>
-                        )}
+                        </span>
                       </span>
                     </button>
                   </div>
@@ -2223,7 +2716,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                         onClick={() => setIsIconPickerOpen((previous) => !previous)}
                         aria-label="Seleccionar icono del perfil"
                         className="mt-2 mx-auto flex h-20 w-20 items-center justify-center rounded-2xl border border-white/60 transition hover:scale-[1.02]"
-                        style={{ backgroundColor: profileMember?.color ?? '#8b6a52' }}
+                        style={{ backgroundColor: profileColorDraft }}
                       >
                         {renderProfileIcon(profileIconDraft, 'h-12 w-12 rounded object-cover text-white')}
                       </button>
@@ -2252,6 +2745,41 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                               </button>
                             );
                           })}
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="rounded-xl bg-white/70 p-3">
+                      <p className="metric-label text-center">Color del perfil</p>
+                      <button
+                        type="button"
+                        onClick={() => setIsColorPickerOpen((previous) => !previous)}
+                        className="mt-2 flex w-full items-center gap-3 rounded-xl border border-black/12 bg-white/85 px-3 py-2 text-left transition hover:border-black/25"
+                        aria-expanded={isColorPickerOpen}
+                        aria-controls="profile-color-picker"
+                        aria-label="Editar color del perfil"
+                      >
+                        <span
+                          className="h-8 w-8 shrink-0 rounded-full border border-black/15 shadow-inner"
+                          style={{ backgroundColor: profileColorDraft }}
+                          aria-hidden
+                        />
+                        <span className="min-w-0 flex-1 leading-tight">
+                          <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-ink/80">
+                            {profileColorDraft.toUpperCase()}
+                          </span>
+                          <span className="block text-[11px] text-ink/58">
+                            Toca para {isColorPickerOpen ? 'ocultar' : 'editar'} color
+                          </span>
+                        </span>
+                        <span className="text-sm font-semibold text-ink/55" aria-hidden>
+                          {isColorPickerOpen ? '−' : '+'}
+                        </span>
+                      </button>
+
+                      {isColorPickerOpen && (
+                        <div id="profile-color-picker" className="mt-2">
+                          <PhotoshopColorPicker value={profileColorDraft} onChange={setProfileColorDraft} />
                         </div>
                       )}
                     </section>
@@ -2957,34 +3485,8 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                         <Tooltip
                           shared={false}
                           cursor={{ fill: 'rgba(128, 98, 76, 0.09)' }}
-                          contentStyle={{
-                            borderRadius: '14px',
-                            border: '1px solid rgba(88, 67, 51, 0.18)',
-                            boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
-                          }}
-                          formatter={(value, name, item) => {
-                            if (!item) {
-                              return [value, name];
-                            }
-
-                            const dataKey = String(item.dataKey ?? '');
-                            if (dataKey.endsWith('__points')) {
-                              const payload = item.payload as Record<string, unknown>;
-                              const taskKey = dataKey.slice(0, -'__points'.length);
-                              const tasks = Number(payload[taskKey] ?? 0);
-                              if (barHoverMetric === 'tasks') {
-                                return [`${tasks} tareas`, String(name)];
-                              }
-
-                              return [`${Number(value ?? 0)} pts`, String(name)];
-                            }
-
-                            if (dataKey === 'totalPoints') {
-                              return [`${Number(value ?? 0)} pts`, String(name)];
-                            }
-
-                            return [value, name];
-                          }}
+                          wrapperStyle={{ outline: 'none' }}
+                          content={renderDailyMetricsTooltip}
                         />
                         {!isMobileViewport && (
                           <Legend
@@ -3142,11 +3644,8 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                             ))}
                           </Pie>
                           <Tooltip
-                            contentStyle={{
-                              borderRadius: '14px',
-                              border: '1px solid rgba(88, 67, 51, 0.18)',
-                              boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
-                            }}
+                            wrapperStyle={{ outline: 'none' }}
+                            content={renderTasksDistributionTooltip}
                           />
                         </PieChart>
                       </ResponsiveContainer>
@@ -3205,11 +3704,8 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                             ))}
                           </Pie>
                           <Tooltip
-                            contentStyle={{
-                              borderRadius: '14px',
-                              border: '1px solid rgba(88, 67, 51, 0.18)',
-                              boxShadow: '0 20px 45px -25px rgba(90, 58, 36, 0.34)',
-                            }}
+                            wrapperStyle={{ outline: 'none' }}
+                            content={renderPointsDistributionTooltip}
                           />
                         </PieChart>
                       </ResponsiveContainer>

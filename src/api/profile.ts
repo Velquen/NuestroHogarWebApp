@@ -1,11 +1,22 @@
 import type { ProfileAvatarIconKey } from '../lib/profile-icons';
 import { getSupabaseClient } from '../lib/supabase';
 
+function normalizeAvatarColor(value: string): string {
+  const trimmed = value.trim();
+  const normalized = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
+  if (!/^#([0-9a-fA-F]{6})$/.test(normalized)) {
+    throw new Error('El color del perfil debe estar en formato HEX, por ejemplo #8b6a52.');
+  }
+
+  return normalized.toLowerCase();
+}
+
 export async function updateMyProfileSettings(params: {
   alias: string | null;
   avatarIconKey: ProfileAvatarIconKey;
+  avatarColor: string;
 }): Promise<void> {
-  const { alias, avatarIconKey } = params;
+  const { alias, avatarIconKey, avatarColor } = params;
   const supabase = getSupabaseClient();
 
   const {
@@ -22,12 +33,14 @@ export async function updateMyProfileSettings(params: {
   }
 
   const normalizedAlias = alias?.trim() || null;
+  const normalizedAvatarColor = normalizeAvatarColor(avatarColor);
 
   const { error } = await supabase
     .from('profiles')
     .update({
       profile_alias: normalizedAlias,
       avatar_icon_key: avatarIconKey,
+      avatar_color: normalizedAvatarColor,
     })
     .eq('user_id', user.id);
 

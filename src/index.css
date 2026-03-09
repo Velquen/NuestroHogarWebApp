@@ -8,6 +8,9 @@
   --bg: 38 52% 94%;
   --ink: 25 24% 22%;
   --panel: 42 58% 97%;
+  --theme-transition-ms: 460ms;
+  --theme-origin-x: 50vw;
+  --theme-origin-y: 24vh;
   --task-item-height: 4.25rem;
   --task-list-gap: 0.5rem;
   --task-list-visible-items: 4;
@@ -126,8 +129,75 @@ body::before {
   opacity: 0.3;
 }
 
+body::after {
+  content: '';
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  opacity: 0;
+  background: radial-gradient(
+    circle at var(--theme-origin-x) var(--theme-origin-y),
+    color-mix(in oklab, #22d3ee 36%, transparent) 0%,
+    color-mix(in oklab, #38bdf8 26%, transparent) 18%,
+    transparent 54%
+  );
+}
+
 #root {
   min-height: 100vh;
+}
+
+html.theme-transitioning * {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: var(--theme-transition-ms);
+  transition-timing-function: cubic-bezier(0.3, 0.95, 0.4, 1);
+}
+
+html.theme-transitioning .theme-toggle {
+  transition-property: border-color, box-shadow, background;
+}
+
+html.theme-transitioning .theme-toggle-thumb {
+  transition-property: transform, background, color, border-color, box-shadow;
+  transition-duration: 280ms;
+  transition-timing-function: cubic-bezier(0.34, 1.12, 0.2, 1);
+}
+
+html.theme-transitioning .theme-toggle-icon {
+  transition-property: opacity, transform;
+  transition-duration: 240ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html.theme-transitioning body::after {
+  animation: themeSwitchGlow calc(var(--theme-transition-ms) * 0.9) cubic-bezier(0.3, 0.95, 0.4, 1)
+    both;
+}
+
+@keyframes themeSwitchGlow {
+  0% {
+    opacity: 0;
+  }
+
+  18% {
+    opacity: 0.24;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.theme-transitioning * {
+    transition-duration: 0ms !important;
+  }
+
+  html.theme-transitioning body::after {
+    animation: none !important;
+    opacity: 0;
+  }
 }
 
 @layer components {
@@ -334,10 +404,11 @@ body::before {
     width: 6.25rem;
     height: 2.2rem;
     padding: 0.12rem;
+    -webkit-tap-highlight-color: transparent;
     transition:
-      border-color 220ms ease,
-      box-shadow 220ms ease,
-      background 260ms ease;
+      border-color 260ms ease,
+      box-shadow 260ms ease,
+      background 300ms ease;
   }
 
   .theme-toggle.is-light {
@@ -369,32 +440,73 @@ body::before {
   }
 
   .theme-toggle-thumb {
+    --theme-thumb-x: 0px;
     position: absolute;
     top: 0.12rem;
     left: 0.12rem;
     z-index: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    display: grid;
+    place-items: center;
     width: calc(50% - 0.12rem);
     height: calc(100% - 0.24rem);
     border-radius: 999px;
     border: 1px solid color-mix(in oklab, var(--border) 85%, transparent);
-    box-shadow: inset 0 1px 0 color-mix(in oklab, white 70%, transparent);
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, white 70%, transparent),
+      0 4px 10px -7px color-mix(in oklab, #020617 72%, transparent);
+    transform: translate3d(var(--theme-thumb-x), 0, 0);
+    backface-visibility: hidden;
+    will-change: transform, border-color, background, color;
     transition:
-      transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 280ms cubic-bezier(0.34, 1.12, 0.2, 1),
       background 260ms ease,
-      color 260ms ease,
-      border-color 260ms ease;
+      color 240ms ease,
+      border-color 260ms ease,
+      box-shadow 260ms ease;
+  }
+
+  .theme-toggle-icon {
+    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+      opacity 220ms ease,
+      transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .theme-toggle-icon svg {
+    display: block;
+  }
+
+  .theme-toggle.is-light .theme-toggle-icon--sun {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  .theme-toggle.is-light .theme-toggle-icon--moon {
+    opacity: 0;
+    transform: translateY(2px) scale(0.86);
+  }
+
+  .theme-toggle.is-dark .theme-toggle-icon--sun {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.86);
+  }
+
+  .theme-toggle.is-dark .theme-toggle-icon--moon {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 
   .theme-toggle.is-light .theme-toggle-thumb {
+    --theme-thumb-x: 0px;
     background: color-mix(in oklab, white 88%, var(--muted));
     color: color-mix(in oklab, var(--foreground) 62%, transparent);
   }
 
   .theme-toggle.is-dark .theme-toggle-thumb {
-    transform: translateX(calc(100% + 0.12rem));
+    --theme-thumb-x: calc(100% + 0.12rem);
     border-color: color-mix(in oklab, #7dd3fc 42%, var(--primary));
     background: linear-gradient(
       180deg,
@@ -402,6 +514,14 @@ body::before {
       color-mix(in oklab, #0ea5e9 18%, #020617)
     );
     color: #e0f2fe;
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, #7dd3fc 42%, transparent),
+      0 6px 12px -8px color-mix(in oklab, #0ea5e9 62%, transparent);
+  }
+
+  .theme-toggle:active .theme-toggle-thumb {
+    transform: translate3d(var(--theme-thumb-x), 0, 0) scale(0.97);
+    transition-duration: 210ms;
   }
 
   .theme-system-chip {
