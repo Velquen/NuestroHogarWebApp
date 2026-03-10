@@ -364,21 +364,44 @@ function TaskDropdown({
   const shouldSkipOptionClickRef = useRef(false);
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const sortedOptions = useMemo(
+    () =>
+      [...options].sort((optionA, optionB) => {
+        const isOptionAAll = optionA.label.trim().toLocaleLowerCase('es') === 'todas';
+        const isOptionBAll = optionB.label.trim().toLocaleLowerCase('es') === 'todas';
 
-  const selectedIndex = options.findIndex((option) => option.value === value && !option.disabled);
-  const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : null;
-  const firstEnabledIndex = useMemo(
-    () => options.findIndex((option) => !option.disabled),
+        if (isOptionAAll && !isOptionBAll) {
+          return -1;
+        }
+
+        if (!isOptionAAll && isOptionBAll) {
+          return 1;
+        }
+
+        return optionA.label.localeCompare(optionB.label, 'es', {
+          numeric: true,
+          sensitivity: 'base',
+        });
+      }),
     [options],
   );
+
+  const selectedIndex = sortedOptions.findIndex(
+    (option) => option.value === value && !option.disabled,
+  );
+  const selectedOption = selectedIndex >= 0 ? sortedOptions[selectedIndex] : null;
+  const firstEnabledIndex = useMemo(
+    () => sortedOptions.findIndex((option) => !option.disabled),
+    [sortedOptions],
+  );
   const lastEnabledIndex = useMemo(() => {
-    for (let index = options.length - 1; index >= 0; index -= 1) {
-      if (!options[index]?.disabled) {
+    for (let index = sortedOptions.length - 1; index >= 0; index -= 1) {
+      if (!sortedOptions[index]?.disabled) {
         return index;
       }
     }
     return -1;
-  }, [options]);
+  }, [sortedOptions]);
   const isDisabled = disabled || firstEnabledIndex === -1;
 
   useEffect(() => {
@@ -459,7 +482,7 @@ function TaskDropdown({
   };
 
   const commitSelection = (index: number) => {
-    const nextOption = options[index];
+    const nextOption = sortedOptions[index];
     if (!nextOption || nextOption.disabled) {
       return;
     }
@@ -470,7 +493,7 @@ function TaskDropdown({
   };
 
   const handleOptionTouchEnd = (event: ReactTouchEvent<HTMLButtonElement>, index: number) => {
-    const nextOption = options[index];
+    const nextOption = sortedOptions[index];
     if (!nextOption || nextOption.disabled) {
       return;
     }
@@ -503,7 +526,7 @@ function TaskDropdown({
           : direction === 1
             ? lastEnabledIndex
             : firstEnabledIndex;
-    const nextIndex = getEnabledOptionIndex(options, baseIndex, direction);
+    const nextIndex = getEnabledOptionIndex(sortedOptions, baseIndex, direction);
 
     if (nextIndex >= 0) {
       setActiveIndex(nextIndex);
@@ -656,7 +679,7 @@ function TaskDropdown({
                 aria-label={ariaLabel}
                 className="task-dropdown-list"
               >
-                {options.map((option, index) => {
+                {sortedOptions.map((option, index) => {
                   const isSelected = option.value === value;
                   const isActive = activeIndex === index;
 
@@ -1555,6 +1578,32 @@ function App() {
     const dayRecord = dailyOverview.find((day) => day.metricDate === todayIsoDate);
     return dayRecord ? Number(dayRecord[getPointsKey(activeMember)] ?? 0) : 0;
   }, [dailyOverview, activeMember, todayIsoDate]);
+  const lastSevenDaysForActiveMember = useMemo(() => {
+    if (!dailyOverview.length) {
+      return {
+        tasks: 0,
+        points: 0,
+        rangeLabel: 'Sin datos',
+      };
+    }
+
+    const lastSevenRows = dailyOverview.slice(-7);
+    const tasks = lastSevenRows.reduce((acc, day) => acc + Number(day[activeMember] ?? 0), 0);
+    const points = lastSevenRows.reduce(
+      (acc, day) => acc + Number(day[getPointsKey(activeMember)] ?? 0),
+      0,
+    );
+    const firstRow = lastSevenRows[0];
+    const lastRow = lastSevenRows[lastSevenRows.length - 1];
+    const rangeLabel =
+      firstRow && lastRow ? `${firstRow.mobileDayLabel} - ${lastRow.mobileDayLabel}` : 'Acumulado';
+
+    return {
+      tasks,
+      points,
+      rangeLabel,
+    };
+  }, [dailyOverview, activeMember]);
 
   const isTodaySelected = taskDate === todayIsoDate;
   const taskFilterCategories = useMemo(
@@ -2777,9 +2826,9 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               {isProfileMenuOpen && (
                 <div
                   id="profile-menu"
-                  className="absolute left-1/2 top-[calc(100%+0.55rem)] z-[80] max-h-[85vh] w-[min(96vw,390px)] -translate-x-1/2 overflow-y-auto rounded-3xl border border-black/12 bg-[color:var(--card)]/95 p-3.5 shadow-[0_24px_64px_-36px_rgba(0,0,0,0.55)] backdrop-blur-md sm:left-auto sm:right-0 sm:translate-x-0 sm:p-4"
+                  className="absolute left-1/2 top-[calc(100%+0.55rem)] z-[80] max-h-[85vh] w-[min(96vw,390px)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-black/12 bg-[color:var(--card)] p-3 shadow-xl backdrop-blur-sm sm:left-auto sm:right-0 sm:translate-x-0 sm:p-4"
                 >
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/52">Mi perfil</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/55">Mi Perfil</p>
 
                   <div className="mt-3 flex items-center justify-center">
                     <button
@@ -2817,21 +2866,21 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     </button>
                   </div>
 
-                  <form id="profile-settings-form" onSubmit={handleProfileSave} className="mt-4 space-y-2.5">
-                    <section className="rounded-2xl border border-black/10 bg-white/45 p-3">
+                  <form id="profile-settings-form" onSubmit={handleProfileSave} className="mt-4 space-y-3">
+                    <section className="rounded-xl bg-white/70 p-3">
                       <p className="metric-label text-center">Icono del perfil</p>
                       <button
                         type="button"
                         onClick={() => setIsIconPickerOpen((previous) => !previous)}
                         aria-label="Seleccionar icono del perfil"
-                        className="mt-2 mx-auto flex h-[4.6rem] w-[4.6rem] items-center justify-center rounded-[1.15rem] border border-black/18 bg-white/10 transition hover:border-black/30"
+                        className="mt-2 mx-auto flex h-20 w-20 items-center justify-center rounded-2xl border border-white/60 transition hover:scale-[1.02]"
                         style={{ backgroundColor: profileColorDraft }}
                       >
-                        {renderProfileIcon(profileIconDraft, 'h-10 w-10 rounded object-cover text-white')}
+                        {renderProfileIcon(profileIconDraft, 'h-12 w-12 rounded object-cover text-white')}
                       </button>
 
                       {isIconPickerOpen && (
-                        <div className="mt-2 grid grid-cols-3 gap-1.5">
+                        <div className="mt-2 grid grid-cols-3 gap-2">
                           {profileIconOptions.map((icon) => {
                             const isSelected = profileIconDraft === icon.key;
                             return (
@@ -2839,14 +2888,14 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                                 key={icon.key}
                                 type="button"
                                 onClick={() => setProfileIconDraft(icon.key)}
-                                className={`rounded-xl border px-2 py-1.5 text-center transition ${
+                                className={`rounded-xl border px-2 py-2 text-center transition ${
                                   isSelected
-                                    ? 'border-sky-500/60 bg-sky-100/35'
-                                    : 'border-black/10 bg-white/55 hover:border-black/20'
+                                    ? 'border-amber-700/55 bg-amber-100/85 shadow-sm'
+                                    : 'border-black/10 bg-white/85 hover:border-black/25'
                                 }`}
                               >
-                                <span className="mx-auto flex h-9 w-9 items-center justify-center rounded-lg bg-white/65 text-ink">
-                                  {renderProfileIcon(icon.key, 'h-6.5 w-6.5 rounded-md object-cover text-ink')}
+                                <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-white/80 text-ink">
+                                  {renderProfileIcon(icon.key, 'h-7 w-7 rounded-md object-cover text-ink')}
                                 </span>
                                 <span className="mt-1 block text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70">
                                   {icon.label}
@@ -2858,28 +2907,36 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       )}
                     </section>
 
-                    <section className="rounded-2xl border border-black/10 bg-white/45 p-3">
-                      <p className="metric-label text-center">Color del perfil</p>
+                    <section className="rounded-xl bg-white/70 p-3">
+                      <label className="block space-y-1.5">
+                        <span className="metric-label text-center">Username</span>
+                        <input
+                          type="text"
+                          value={profileAliasDraft}
+                          onChange={(event) => setProfileAliasDraft(event.target.value)}
+                          maxLength={32}
+                          placeholder="Escribe tu userName"
+                          className="w-full rounded-xl border border-black/12 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
+                        />
+                      </label>
+                    </section>
+
+                    <section className="rounded-xl bg-white/70 p-3">
                       <button
                         type="button"
                         onClick={() => setIsColorPickerOpen((previous) => !previous)}
-                        className="mt-2 flex w-full items-center gap-2.5 rounded-xl border border-black/12 bg-white/35 px-3 py-1.5 text-left transition hover:border-black/25"
+                        className="flex w-full items-center gap-3 rounded-xl border border-black/12 bg-white/85 px-3 py-2 text-left transition hover:border-black/25"
                         aria-expanded={isColorPickerOpen}
                         aria-controls="profile-color-picker"
                         aria-label="Editar color del perfil"
                       >
                         <span
-                          className="h-7 w-7 shrink-0 rounded-full border border-black/15 shadow-inner"
+                          className="h-8 w-8 shrink-0 rounded-full border border-black/15 shadow-inner"
                           style={{ backgroundColor: profileColorDraft }}
                           aria-hidden
                         />
                         <span className="min-w-0 flex-1 leading-tight">
-                          <span className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-ink/80">
-                            {profileColorDraft.toUpperCase()}
-                          </span>
-                          <span className="block text-[10px] text-ink/58">
-                            Toca para {isColorPickerOpen ? 'ocultar' : 'editar'} color
-                          </span>
+                          <span className="block text-sm font-semibold text-ink/80">mi color</span>
                         </span>
                         <span className="text-sm font-semibold text-ink/55" aria-hidden>
                           {isColorPickerOpen ? '−' : '+'}
@@ -2893,20 +2950,6 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       )}
                     </section>
 
-                    <section className="rounded-2xl border border-black/10 bg-white/45 p-3">
-                      <label className="block space-y-1.5">
-                        <span className="metric-label text-center">Username</span>
-                        <input
-                          type="text"
-                          value={profileAliasDraft}
-                          onChange={(event) => setProfileAliasDraft(event.target.value)}
-                          maxLength={32}
-                          placeholder="Escribe tu userName"
-                          className="w-full rounded-xl border border-black/12 bg-white/35 px-3 py-1.5 text-sm text-ink outline-none transition focus:border-black/30"
-                        />
-                      </label>
-                    </section>
-
                   </form>
 
                   <div className="mt-4 flex items-center justify-center">
@@ -2914,7 +2957,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       type="submit"
                       form="profile-settings-form"
                       disabled={isSavingProfile}
-                      className="btn-primary min-w-[180px] px-4 py-2 text-xs uppercase tracking-[0.06em] disabled:cursor-not-allowed disabled:opacity-70"
+                      className="btn-primary px-3 py-2 text-xs uppercase tracking-[0.08em] disabled:cursor-not-allowed disabled:opacity-70"
                     >
                       {isSavingProfile ? 'Guardando...' : 'Guardar perfil'}
                     </button>
@@ -3594,6 +3637,40 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     </span>
                     <span className="today-status-points">
                       {todayPointsForActiveMember} {todayPointsForActiveMember === 1 ? 'pto' : 'pts'}
+                    </span>
+                  </div>
+                </article>
+
+                <article className="today-status-card">
+                  <div className="today-status-top">
+                    <div>
+                      <p className="metric-label">Últimos 7 días</p>
+                      <p className="today-status-date">{lastSevenDaysForActiveMember.rangeLabel}</p>
+                    </div>
+                    <span
+                      className="today-status-avatar"
+                      style={{ backgroundColor: activeMemberProfile?.color ?? '#8b6a52' }}
+                      title={activeMemberProfile?.name ?? activeMember}
+                    >
+                      {renderProfileIcon(
+                        activeMemberProfile?.avatarIconKey,
+                        'h-5 w-5 rounded-sm object-cover text-white',
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="today-status-main">
+                    <p className="today-status-count">{lastSevenDaysForActiveMember.tasks}</p>
+                    <p className="today-status-unit">
+                      {lastSevenDaysForActiveMember.tasks === 1 ? 'tarea' : 'tareas'}
+                    </p>
+                  </div>
+
+                  <div className="today-status-row">
+                    <span className="today-status-member">{activeMemberProfile?.name ?? activeMember}</span>
+                    <span className="today-status-points">
+                      {lastSevenDaysForActiveMember.points}{' '}
+                      {lastSevenDaysForActiveMember.points === 1 ? 'pto' : 'pts'}
                     </span>
                   </div>
                 </article>
