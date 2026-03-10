@@ -2981,7 +2981,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
         <section
           id="tareas-comunidad"
-          className="panel animate-rise p-4 [animation-delay:130ms] sm:p-8"
+          className="panel relative z-20 animate-rise p-4 [animation-delay:130ms] sm:p-8"
         >
           <div className="mb-5">
             <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">

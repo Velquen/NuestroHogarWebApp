@@ -46,9 +46,9 @@
   --range-switch-border: color-mix(in oklab, #38bdf8 34%, var(--border));
   --range-switch-inactive-text: color-mix(in oklab, #0369a1 72%, var(--foreground));
   --range-switch-hover-bg: color-mix(in oklab, #bae6fd 56%, var(--card));
-  --range-switch-active-bg: #0284c7;
-  --range-switch-active-text: #e0f2fe;
-  --range-switch-active-shadow: 0 10px 18px -11px color-mix(in oklab, #0284c7 60%, transparent);
+  --range-switch-active-bg: var(--button-primary-bg);
+  --range-switch-active-text: var(--button-primary-text);
+  --range-switch-active-shadow: var(--button-primary-shadow);
 }
 
 * {
@@ -1823,17 +1823,13 @@ html.theme-transitioning body::after {
     --mode-border-violet: #7c56cc;
     --mode-text-violet: #d6c2ff;
     --mode-glow-violet: #7c56cc;
-    --range-switch-bg: linear-gradient(
-      132deg,
-      color-mix(in oklab, #0ea5e9 26%, var(--card)),
-      color-mix(in oklab, #0284c7 22%, var(--card))
-    );
-    --range-switch-border: color-mix(in oklab, #2737e6 56%, var(--input));
-    --range-switch-inactive-text: color-mix(in oklab, #a5b4fc 76%, var(--foreground));
-    --range-switch-hover-bg: color-mix(in oklab, #2737e6 24%, var(--card));
-    --range-switch-active-bg: #2737e6;
-    --range-switch-active-text: #eef2ff;
-    --range-switch-active-shadow: 0 12px 20px -12px color-mix(in oklab, #2737e6 74%, transparent);
+    --range-switch-bg: color-mix(in oklab, var(--button-primary-bg) 18%, var(--card));
+    --range-switch-border: color-mix(in oklab, var(--button-primary-bg) 56%, var(--input));
+    --range-switch-inactive-text: color-mix(in oklab, var(--button-primary-bg) 42%, #cbd5e1);
+    --range-switch-hover-bg: color-mix(in oklab, var(--button-primary-bg) 24%, var(--card));
+    --range-switch-active-bg: var(--button-primary-bg);
+    --range-switch-active-text: var(--button-primary-text);
+    --range-switch-active-shadow: var(--button-primary-shadow);
   }
   body {
     letter-spacing: var(--tracking-normal);
