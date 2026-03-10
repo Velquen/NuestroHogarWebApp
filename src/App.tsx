@@ -124,6 +124,15 @@ interface DonutChartTooltipProps {
   payload?: DonutChartTooltipPayloadItem[];
 }
 
+interface ChartLegendPayloadItem {
+  color?: string;
+  value?: string;
+}
+
+interface ChartLegendProps {
+  payload?: ChartLegendPayloadItem[];
+}
+
 type AuthMode = 'sign-in' | 'sign-up';
 
 function isThemeMode(value: string | null): value is ThemeMode {
@@ -1314,6 +1323,31 @@ function App() {
     },
     [barHoverMetric, data, isMobileViewport],
   );
+
+  const renderDailyChartLegend = useCallback(({ payload }: ChartLegendProps) => {
+    if (!payload?.length) {
+      return null;
+    }
+
+    return (
+      <div className="pt-2.5">
+        <div className="flex flex-wrap items-start justify-center gap-x-4 gap-y-2.5">
+          {payload.map((entry) => (
+            <div key={`${entry.value ?? 'legend'}-${entry.color ?? 'color'}`} className="min-w-[58px] text-center">
+              <span
+                className="mx-auto block h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: entry.color ?? '#7a5b48' }}
+                aria-hidden
+              />
+              <span className="mt-1 block text-[10px] font-medium uppercase tracking-[0.08em] text-ink/58">
+                {entry.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }, []);
 
   const weeklyTotal = data?.totalTasks ?? 0;
   const weeklyPointsTotal = data?.totalPoints ?? 0;
@@ -2743,9 +2777,9 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               {isProfileMenuOpen && (
                 <div
                   id="profile-menu"
-                  className="absolute left-1/2 top-[calc(100%+0.55rem)] z-[80] max-h-[85vh] w-[min(96vw,390px)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-black/12 bg-[color:var(--card)] p-3 shadow-xl backdrop-blur-sm sm:left-auto sm:right-0 sm:translate-x-0 sm:p-4"
+                  className="absolute left-1/2 top-[calc(100%+0.55rem)] z-[80] max-h-[85vh] w-[min(96vw,390px)] -translate-x-1/2 overflow-y-auto rounded-3xl border border-black/12 bg-[color:var(--card)]/95 p-3.5 shadow-[0_24px_64px_-36px_rgba(0,0,0,0.55)] backdrop-blur-md sm:left-auto sm:right-0 sm:translate-x-0 sm:p-4"
                 >
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/55">Mi Perfil</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/52">Mi perfil</p>
 
                   <div className="mt-3 flex items-center justify-center">
                     <button
@@ -2783,21 +2817,21 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     </button>
                   </div>
 
-                  <form id="profile-settings-form" onSubmit={handleProfileSave} className="mt-4 space-y-3">
-                    <section className="rounded-xl bg-white/70 p-3">
+                  <form id="profile-settings-form" onSubmit={handleProfileSave} className="mt-4 space-y-2.5">
+                    <section className="rounded-2xl border border-black/10 bg-white/45 p-3">
                       <p className="metric-label text-center">Icono del perfil</p>
                       <button
                         type="button"
                         onClick={() => setIsIconPickerOpen((previous) => !previous)}
                         aria-label="Seleccionar icono del perfil"
-                        className="mt-2 mx-auto flex h-20 w-20 items-center justify-center rounded-2xl border border-white/60 transition hover:scale-[1.02]"
+                        className="mt-2 mx-auto flex h-[4.6rem] w-[4.6rem] items-center justify-center rounded-[1.15rem] border border-black/18 bg-white/10 transition hover:border-black/30"
                         style={{ backgroundColor: profileColorDraft }}
                       >
-                        {renderProfileIcon(profileIconDraft, 'h-12 w-12 rounded object-cover text-white')}
+                        {renderProfileIcon(profileIconDraft, 'h-10 w-10 rounded object-cover text-white')}
                       </button>
 
                       {isIconPickerOpen && (
-                        <div className="mt-2 grid grid-cols-3 gap-2">
+                        <div className="mt-2 grid grid-cols-3 gap-1.5">
                           {profileIconOptions.map((icon) => {
                             const isSelected = profileIconDraft === icon.key;
                             return (
@@ -2805,14 +2839,14 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                                 key={icon.key}
                                 type="button"
                                 onClick={() => setProfileIconDraft(icon.key)}
-                                className={`rounded-xl border px-2 py-2 text-center transition ${
+                                className={`rounded-xl border px-2 py-1.5 text-center transition ${
                                   isSelected
-                                    ? 'border-amber-700/55 bg-amber-100/85 shadow-sm'
-                                    : 'border-black/10 bg-white/85 hover:border-black/25'
+                                    ? 'border-sky-500/60 bg-sky-100/35'
+                                    : 'border-black/10 bg-white/55 hover:border-black/20'
                                 }`}
                               >
-                                <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-white/80 text-ink">
-                                  {renderProfileIcon(icon.key, 'h-7 w-7 rounded-md object-cover text-ink')}
+                                <span className="mx-auto flex h-9 w-9 items-center justify-center rounded-lg bg-white/65 text-ink">
+                                  {renderProfileIcon(icon.key, 'h-6.5 w-6.5 rounded-md object-cover text-ink')}
                                 </span>
                                 <span className="mt-1 block text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70">
                                   {icon.label}
@@ -2824,26 +2858,26 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       )}
                     </section>
 
-                    <section className="rounded-xl bg-white/70 p-3">
+                    <section className="rounded-2xl border border-black/10 bg-white/45 p-3">
                       <p className="metric-label text-center">Color del perfil</p>
                       <button
                         type="button"
                         onClick={() => setIsColorPickerOpen((previous) => !previous)}
-                        className="mt-2 flex w-full items-center gap-3 rounded-xl border border-black/12 bg-white/85 px-3 py-2 text-left transition hover:border-black/25"
+                        className="mt-2 flex w-full items-center gap-2.5 rounded-xl border border-black/12 bg-white/35 px-3 py-1.5 text-left transition hover:border-black/25"
                         aria-expanded={isColorPickerOpen}
                         aria-controls="profile-color-picker"
                         aria-label="Editar color del perfil"
                       >
                         <span
-                          className="h-8 w-8 shrink-0 rounded-full border border-black/15 shadow-inner"
+                          className="h-7 w-7 shrink-0 rounded-full border border-black/15 shadow-inner"
                           style={{ backgroundColor: profileColorDraft }}
                           aria-hidden
                         />
                         <span className="min-w-0 flex-1 leading-tight">
-                          <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-ink/80">
+                          <span className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-ink/80">
                             {profileColorDraft.toUpperCase()}
                           </span>
-                          <span className="block text-[11px] text-ink/58">
+                          <span className="block text-[10px] text-ink/58">
                             Toca para {isColorPickerOpen ? 'ocultar' : 'editar'} color
                           </span>
                         </span>
@@ -2859,16 +2893,16 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       )}
                     </section>
 
-                    <section className="rounded-xl bg-white/70 p-3">
+                    <section className="rounded-2xl border border-black/10 bg-white/45 p-3">
                       <label className="block space-y-1.5">
-                        <span className="metric-label text-center">UserName</span>
+                        <span className="metric-label text-center">Username</span>
                         <input
                           type="text"
                           value={profileAliasDraft}
                           onChange={(event) => setProfileAliasDraft(event.target.value)}
                           maxLength={32}
                           placeholder="Escribe tu userName"
-                          className="w-full rounded-xl border border-black/12 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-black/30"
+                          className="w-full rounded-xl border border-black/12 bg-white/35 px-3 py-1.5 text-sm text-ink outline-none transition focus:border-black/30"
                         />
                       </label>
                     </section>
@@ -2880,7 +2914,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       type="submit"
                       form="profile-settings-form"
                       disabled={isSavingProfile}
-                      className="btn-primary px-3 py-2 text-xs uppercase tracking-[0.08em] disabled:cursor-not-allowed disabled:opacity-70"
+                      className="btn-primary min-w-[180px] px-4 py-2 text-xs uppercase tracking-[0.06em] disabled:cursor-not-allowed disabled:opacity-70"
                     >
                       {isSavingProfile ? 'Guardando...' : 'Guardar perfil'}
                     </button>
@@ -2920,7 +2954,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
             {inviteLinkValue && (
               <div
                 ref={inviteLinkPanelRef}
-                className="w-full rounded-xl border border-sky-200 bg-sky-50/85 p-3"
+                className="w-full rounded-xl border border-sky-200/80 bg-transparent p-2.5"
               >
                 <button
                   type="button"
@@ -2952,23 +2986,23 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
                 {isInviteLinkExpanded && (
                   <>
-                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                    <div className="mt-1.5 flex flex-col gap-1.5 sm:flex-row">
                       <input
                         type="text"
                         readOnly
                         value={inviteLinkValue}
-                        className="w-full rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs text-sky-900 outline-none"
+                        className="w-full rounded-lg border border-sky-300 bg-sky-50/10 px-3 py-1.5 text-xs text-sky-900 outline-none"
                       />
                       <button
                         type="button"
                         onClick={handleCopyInviteLink}
-                        className="rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-800 transition hover:border-sky-500 hover:bg-sky-100"
+                        className="rounded-lg border border-sky-300 bg-sky-50/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-sky-800 transition hover:border-sky-500 hover:bg-sky-100/40"
                       >
                         Copiar
                       </button>
                     </div>
                     {inviteLinkExpiresAt && (
-                      <p className="mt-2 text-[11px] text-sky-800/90">
+                      <p className="mt-1.5 text-[11px] text-sky-800/90">
                         Expira: {formatDateTimeLabel(inviteLinkExpiresAt)}
                       </p>
                     )}
@@ -2987,9 +3021,6 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
             <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">
               Tareas de la Comunidad
             </h2>
-            <p className="text-sm text-ink/65">
-              Gestiona el listado de tareas creadas y agrega nuevas tareas con puntuación.
-            </p>
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-4">
@@ -3061,7 +3092,9 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                 </span>
               </button>
 
-              <div className={`${isMobileCreateTaskOpen ? 'space-y-5 pt-1' : 'hidden'} lg:block`}>
+              <div
+                className={`${isMobileCreateTaskOpen ? 'space-y-5 pt-1' : 'hidden'} lg:block lg:space-y-5 lg:pt-1`}
+              >
                 <label className="space-y-2">
                   <span className="metric-label">Nombre de la tarea</span>
                   <div className="task-field-shell">
@@ -3195,12 +3228,12 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
           )}
 
           {!isLoading && !isError && data && (
-            <article className="rounded-2xl border border-black/10 bg-white/75 p-2 sm:p-4">
+            <article className="rounded-2xl border border-black/10 bg-white/70 p-2.5 sm:p-3.5">
               <div className="mb-3 flex flex-col items-start gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-                <p className="text-sm font-semibold uppercase tracking-[0.14em] text-ink/70">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink/68">
                   Ritmo diario y contribución
                 </p>
-                <p className="w-full text-[11px] leading-relaxed text-ink/58 sm:w-auto sm:text-xs">
+                <p className="w-full text-[10px] leading-relaxed text-ink/55 sm:w-auto sm:text-[11px]">
                   Día con mayor actividad: <strong>{busiestDay.day}</strong> ({busiestDay.total} tareas,{' '}
                   {busiestDay.totalPoints} pts)
                 </p>
@@ -3211,18 +3244,18 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     data={dailyOverview}
                     barGap={0}
                     barCategoryGap="30%"
-                    margin={{ top: 8, right: 4, bottom: 8, left: -8 }}
+                    margin={{ top: 6, right: 6, bottom: 6, left: -8 }}
                   >
-                    <CartesianGrid vertical={false} strokeDasharray="3 6" stroke="rgba(94, 74, 59, 0.2)" />
+                    <CartesianGrid vertical={false} strokeDasharray="2 7" stroke="rgba(91, 69, 55, 0.14)" />
                     <XAxis
                       dataKey={isMobileViewport ? 'mobileDayLabel' : 'day'}
-                      tick={{ fill: '#5b4537', fontSize: 12, fontWeight: 600 }}
+                      tick={{ fill: 'rgba(91, 69, 55, 0.75)', fontSize: 11, fontWeight: 500 }}
                       axisLine={false}
                       tickLine={false}
                     />
                     <YAxis
-                      tick={{ fill: 'rgba(91, 69, 55, 0.78)', fontSize: 10 }}
-                      axisLine={{ stroke: 'rgba(91, 69, 55, 0.36)', strokeWidth: 1 }}
+                      tick={{ fill: 'rgba(91, 69, 55, 0.62)', fontSize: 10 }}
+                      axisLine={false}
                       tickLine={false}
                       width={14}
                       mirror
@@ -3239,11 +3272,8 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     />
                     {!isMobileViewport && (
                       <Legend
-                        wrapperStyle={{
-                          fontSize: '11px',
-                          textTransform: 'uppercase',
-                          paddingTop: '8px',
-                        }}
+                        content={renderDailyChartLegend}
+                        wrapperStyle={{ paddingTop: '2px' }}
                       />
                     )}
 
@@ -3253,8 +3283,8 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                         dataKey={getPointsKey(member.name)}
                         name={member.name}
                         fill={member.color}
-                        maxBarSize={28}
-                        radius={[7, 7, 0, 0]}
+                        maxBarSize={20}
+                        radius={[5, 5, 0, 0]}
                         shape={(shapeProps: unknown) => {
                           const normalizedShapeProps = (shapeProps ?? {}) as {
                             dataKey?: string;
@@ -3298,9 +3328,9 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                                 y={y}
                                 width={width}
                                 height={height}
-                                rx={6}
-                                ry={6}
-                                fill={hexToRgba(fill, 0.42)}
+                                rx={5}
+                                ry={5}
+                                fill={hexToRgba(fill, 0.34)}
                                 onMouseEnter={() => setBarHoverMetric('points')}
                                 onClick={() => setBarHoverMetric('points')}
                               />
@@ -3309,9 +3339,9 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                                 y={innerY}
                                 width={innerWidth}
                                 height={innerHeight}
-                                rx={4}
-                                ry={4}
-                                fill={hexToRgba(fill, 0.92)}
+                                rx={3}
+                                ry={3}
+                                fill={hexToRgba(fill, 0.82)}
                                 onMouseEnter={() => setBarHoverMetric('tasks')}
                                 onMouseLeave={() => setBarHoverMetric('points')}
                                 onClick={() => setBarHoverMetric('tasks')}
@@ -3326,17 +3356,17 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       type="monotone"
                       dataKey="totalPoints"
                       name="Total diario (pts)"
-                      stroke="#51392d"
-                      strokeWidth={isMobileViewport ? 2 : 2.5}
+                      stroke="#6f9ebc"
+                      strokeWidth={isMobileViewport ? 1.8 : 2.2}
                       dot={
                         isMobileViewport
-                          ? { r: 1.8, strokeWidth: 0.8, fill: '#ffffff' }
-                          : { r: 3, strokeWidth: 1, fill: '#ffffff' }
+                          ? { r: 1.6, strokeWidth: 1, stroke: '#6f9ebc', fill: '#e9f3fa' }
+                          : { r: 2.6, strokeWidth: 1.2, stroke: '#6f9ebc', fill: '#e9f3fa' }
                       }
                       activeDot={
                         isMobileViewport
-                          ? { r: 3, strokeWidth: 1.1, fill: '#ffffff' }
-                          : { r: 5 }
+                          ? { r: 3, strokeWidth: 1.2, stroke: '#6f9ebc', fill: '#f6fbff' }
+                          : { r: 4, strokeWidth: 1.3, stroke: '#6f9ebc', fill: '#f6fbff' }
                       }
                     />
                   </ComposedChart>
