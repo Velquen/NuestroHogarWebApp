@@ -1199,6 +1199,8 @@ function App() {
   const [taskToDelete, setTaskToDelete] = useState<CommunityTask | null>(null);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isCommunitiesMenuOpen, setIsCommunitiesMenuOpen] = useState(false);
+  const [todayStatusCardMemberUserId, setTodayStatusCardMemberUserId] = useState<string | null>(null);
+  const [sevenDayStatusCardMemberUserId, setSevenDayStatusCardMemberUserId] = useState<string | null>(null);
   const [profileAliasDraft, setProfileAliasDraft] = useState('');
   const [profileIconDraft, setProfileIconDraft] = useState<ProfileAvatarIconKey>('leaf_svg');
   const [profileColorDraft, setProfileColorDraft] = useState(DEFAULT_PROFILE_COLOR);
@@ -1536,6 +1538,83 @@ function App() {
   const canInviteToCommunity =
     profileMember?.roleKey === 'owner' || profileMember?.roleKey === 'admin';
   const activeMemberProfile = profileMember;
+  const communityMembers = data?.members ?? [];
+  const todayStatusCardMember = useMemo(() => {
+    if (!communityMembers.length) {
+      return null;
+    }
+
+    if (todayStatusCardMemberUserId) {
+      const selectedMember = communityMembers.find((member) => member.userId === todayStatusCardMemberUserId);
+      if (selectedMember) {
+        return selectedMember;
+      }
+    }
+
+    return activeMemberProfile ?? communityMembers[0];
+  }, [activeMemberProfile, communityMembers, todayStatusCardMemberUserId]);
+  const todayStatusCardMemberName: MemberName = todayStatusCardMember?.name ?? activeMember;
+  const todayStatusCardMemberColor = todayStatusCardMember?.color ?? '#8b6a52';
+  const todayStatusCardMemberAvatarIcon = todayStatusCardMember?.avatarIconKey;
+  const todayStatusCardMemberLabel = todayStatusCardMember?.name ?? activeMember;
+
+  const sevenDayStatusCardMember = useMemo(() => {
+    if (!communityMembers.length) {
+      return null;
+    }
+
+    if (sevenDayStatusCardMemberUserId) {
+      const selectedMember = communityMembers.find((member) => member.userId === sevenDayStatusCardMemberUserId);
+      if (selectedMember) {
+        return selectedMember;
+      }
+    }
+
+    return activeMemberProfile ?? communityMembers[0];
+  }, [activeMemberProfile, communityMembers, sevenDayStatusCardMemberUserId]);
+  const sevenDayStatusCardMemberName: MemberName = sevenDayStatusCardMember?.name ?? activeMember;
+  const sevenDayStatusCardMemberColor = sevenDayStatusCardMember?.color ?? '#8b6a52';
+  const sevenDayStatusCardMemberAvatarIcon = sevenDayStatusCardMember?.avatarIconKey;
+  const sevenDayStatusCardMemberLabel = sevenDayStatusCardMember?.name ?? activeMember;
+
+  const handleCycleTodayStatusCardMember = useCallback(() => {
+    if (!communityMembers.length) {
+      return;
+    }
+
+    setTodayStatusCardMemberUserId((previous) => {
+      const currentId = previous ?? todayStatusCardMember?.userId ?? communityMembers[0]?.userId;
+      const currentIndex = communityMembers.findIndex((member) => member.userId === currentId);
+      const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+      const nextMember = communityMembers[(safeIndex + 1) % communityMembers.length];
+      return nextMember?.userId ?? null;
+    });
+  }, [communityMembers, todayStatusCardMember]);
+
+  const handleCycleSevenDayStatusCardMember = useCallback(() => {
+    if (!communityMembers.length) {
+      return;
+    }
+
+    setSevenDayStatusCardMemberUserId((previous) => {
+      const currentId = previous ?? sevenDayStatusCardMember?.userId ?? communityMembers[0]?.userId;
+      const currentIndex = communityMembers.findIndex((member) => member.userId === currentId);
+      const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+      const nextMember = communityMembers[(safeIndex + 1) % communityMembers.length];
+      return nextMember?.userId ?? null;
+    });
+  }, [communityMembers, sevenDayStatusCardMember]);
+
+  const handleStatusCardKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>, onActivate: () => void) => {
+      if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
+      }
+      event.preventDefault();
+      onActivate();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!profileMember) {
@@ -1552,6 +1631,34 @@ function App() {
   }, [profileMember]);
 
   useEffect(() => {
+    if (!communityMembers.length) {
+      if (todayStatusCardMemberUserId) {
+        setTodayStatusCardMemberUserId(null);
+      }
+      if (sevenDayStatusCardMemberUserId) {
+        setSevenDayStatusCardMemberUserId(null);
+      }
+      return;
+    }
+
+    if (todayStatusCardMemberUserId) {
+      const existsTodayMember = communityMembers.some((member) => member.userId === todayStatusCardMemberUserId);
+      if (!existsTodayMember) {
+        setTodayStatusCardMemberUserId(null);
+      }
+    }
+
+    if (sevenDayStatusCardMemberUserId) {
+      const existsSevenDayMember = communityMembers.some(
+        (member) => member.userId === sevenDayStatusCardMemberUserId,
+      );
+      if (!existsSevenDayMember) {
+        setSevenDayStatusCardMemberUserId(null);
+      }
+    }
+  }, [communityMembers, sevenDayStatusCardMemberUserId, todayStatusCardMemberUserId]);
+
+  useEffect(() => {
     if (!selectedCommunityId || !data) {
       return;
     }
@@ -1562,23 +1669,23 @@ function App() {
     }
   }, [data, selectedCommunityId]);
 
-  const todayForActiveMember = useMemo(() => {
+  const todayForTodayStatusCardMember = useMemo(() => {
     if (!dailyOverview.length) {
       return 0;
     }
 
     const dayRecord = dailyOverview.find((day) => day.metricDate === todayIsoDate);
-    return dayRecord ? Number(dayRecord[activeMember] ?? 0) : 0;
-  }, [dailyOverview, activeMember, todayIsoDate]);
-  const todayPointsForActiveMember = useMemo(() => {
+    return dayRecord ? Number(dayRecord[todayStatusCardMemberName] ?? 0) : 0;
+  }, [dailyOverview, todayStatusCardMemberName, todayIsoDate]);
+  const todayPointsForTodayStatusCardMember = useMemo(() => {
     if (!dailyOverview.length) {
       return 0;
     }
 
     const dayRecord = dailyOverview.find((day) => day.metricDate === todayIsoDate);
-    return dayRecord ? Number(dayRecord[getPointsKey(activeMember)] ?? 0) : 0;
-  }, [dailyOverview, activeMember, todayIsoDate]);
-  const lastSevenDaysForActiveMember = useMemo(() => {
+    return dayRecord ? Number(dayRecord[getPointsKey(todayStatusCardMemberName)] ?? 0) : 0;
+  }, [dailyOverview, todayStatusCardMemberName, todayIsoDate]);
+  const lastSevenDaysForSevenDayStatusCardMember = useMemo(() => {
     if (!dailyOverview.length) {
       return {
         tasks: 0,
@@ -1588,9 +1695,9 @@ function App() {
     }
 
     const lastSevenRows = dailyOverview.slice(-7);
-    const tasks = lastSevenRows.reduce((acc, day) => acc + Number(day[activeMember] ?? 0), 0);
+    const tasks = lastSevenRows.reduce((acc, day) => acc + Number(day[sevenDayStatusCardMemberName] ?? 0), 0);
     const points = lastSevenRows.reduce(
-      (acc, day) => acc + Number(day[getPointsKey(activeMember)] ?? 0),
+      (acc, day) => acc + Number(day[getPointsKey(sevenDayStatusCardMemberName)] ?? 0),
       0,
     );
     const firstRow = lastSevenRows[0];
@@ -1603,7 +1710,7 @@ function App() {
       points,
       rangeLabel,
     };
-  }, [dailyOverview, activeMember]);
+  }, [dailyOverview, sevenDayStatusCardMemberName]);
 
   const isTodaySelected = taskDate === todayIsoDate;
   const taskFilterCategories = useMemo(
@@ -3606,7 +3713,17 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               </form>
 
               <aside className="space-y-4 rounded-2xl border border-black/10 bg-white/80 p-3.5 sm:p-4">
-                <article className="today-status-card">
+                <article
+                  className="today-status-card cursor-pointer transition-transform duration-200 hover:-translate-y-0.5 active:scale-[0.99]"
+                  style={{
+                    borderColor: hexToRgba(todayStatusCardMemberColor, 0.34),
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Ver siguiente integrante en estado de hoy"
+                  onClick={handleCycleTodayStatusCardMember}
+                  onKeyDown={(event) => handleStatusCardKeyDown(event, handleCycleTodayStatusCardMember)}
+                >
                   <div className="today-status-top">
                     <div>
                       <p className="metric-label">Estado de hoy</p>
@@ -3614,63 +3731,72 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     </div>
                     <span
                       className="today-status-avatar"
-                      style={{ backgroundColor: activeMemberProfile?.color ?? '#8b6a52' }}
-                      title={activeMemberProfile?.name ?? activeMember}
+                      style={{ backgroundColor: todayStatusCardMemberColor }}
+                      title={todayStatusCardMemberLabel}
                     >
                       {renderProfileIcon(
-                        activeMemberProfile?.avatarIconKey,
+                        todayStatusCardMemberAvatarIcon,
                         'h-5 w-5 rounded-sm object-cover text-white',
                       )}
                     </span>
                   </div>
 
                   <div className="today-status-main">
-                    <p className="today-status-count">{todayForActiveMember}</p>
+                    <p className="today-status-count">{todayForTodayStatusCardMember}</p>
                     <p className="today-status-unit">
-                      {todayForActiveMember === 1 ? 'tarea' : 'tareas'}
+                      {todayForTodayStatusCardMember === 1 ? 'tarea' : 'tareas'}
                     </p>
                   </div>
 
                   <div className="today-status-row">
-                    <span className="today-status-member">
-                      {activeMemberProfile?.name ?? activeMember}
-                    </span>
+                    <span className="today-status-member">{todayStatusCardMemberLabel}</span>
                     <span className="today-status-points">
-                      {todayPointsForActiveMember} {todayPointsForActiveMember === 1 ? 'pto' : 'pts'}
+                      {todayPointsForTodayStatusCardMember}{' '}
+                      {todayPointsForTodayStatusCardMember === 1 ? 'pto' : 'pts'}
                     </span>
                   </div>
                 </article>
 
-                <article className="today-status-card">
+                <article
+                  className="today-status-card cursor-pointer transition-transform duration-200 hover:-translate-y-0.5 active:scale-[0.99]"
+                  style={{
+                    borderColor: hexToRgba(sevenDayStatusCardMemberColor, 0.34),
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Ver siguiente integrante en últimos 7 días"
+                  onClick={handleCycleSevenDayStatusCardMember}
+                  onKeyDown={(event) => handleStatusCardKeyDown(event, handleCycleSevenDayStatusCardMember)}
+                >
                   <div className="today-status-top">
                     <div>
                       <p className="metric-label">Últimos 7 días</p>
-                      <p className="today-status-date">{lastSevenDaysForActiveMember.rangeLabel}</p>
+                      <p className="today-status-date">{lastSevenDaysForSevenDayStatusCardMember.rangeLabel}</p>
                     </div>
                     <span
                       className="today-status-avatar"
-                      style={{ backgroundColor: activeMemberProfile?.color ?? '#8b6a52' }}
-                      title={activeMemberProfile?.name ?? activeMember}
+                      style={{ backgroundColor: sevenDayStatusCardMemberColor }}
+                      title={sevenDayStatusCardMemberLabel}
                     >
                       {renderProfileIcon(
-                        activeMemberProfile?.avatarIconKey,
+                        sevenDayStatusCardMemberAvatarIcon,
                         'h-5 w-5 rounded-sm object-cover text-white',
                       )}
                     </span>
                   </div>
 
                   <div className="today-status-main">
-                    <p className="today-status-count">{lastSevenDaysForActiveMember.tasks}</p>
+                    <p className="today-status-count">{lastSevenDaysForSevenDayStatusCardMember.tasks}</p>
                     <p className="today-status-unit">
-                      {lastSevenDaysForActiveMember.tasks === 1 ? 'tarea' : 'tareas'}
+                      {lastSevenDaysForSevenDayStatusCardMember.tasks === 1 ? 'tarea' : 'tareas'}
                     </p>
                   </div>
 
                   <div className="today-status-row">
-                    <span className="today-status-member">{activeMemberProfile?.name ?? activeMember}</span>
+                    <span className="today-status-member">{sevenDayStatusCardMemberLabel}</span>
                     <span className="today-status-points">
-                      {lastSevenDaysForActiveMember.points}{' '}
-                      {lastSevenDaysForActiveMember.points === 1 ? 'pto' : 'pts'}
+                      {lastSevenDaysForSevenDayStatusCardMember.points}{' '}
+                      {lastSevenDaysForSevenDayStatusCardMember.points === 1 ? 'pto' : 'pts'}
                     </span>
                   </div>
                 </article>
