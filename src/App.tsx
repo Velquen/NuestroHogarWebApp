@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useEffect,
   useId,
@@ -351,6 +352,7 @@ function TaskDropdown({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const shouldSkipOptionClickRef = useRef(false);
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
 
@@ -456,6 +458,33 @@ function TaskDropdown({
     closeDropdown();
     onChange(nextOption.value);
     focusTrigger();
+  };
+
+  const handleOptionPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    index: number,
+  ) => {
+    if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+      return;
+    }
+
+    const nextOption = options[index];
+    if (!nextOption || nextOption.disabled) {
+      return;
+    }
+
+    shouldSkipOptionClickRef.current = true;
+    event.preventDefault();
+    commitSelection(index);
+  };
+
+  const handleOptionClick = (index: number) => {
+    if (shouldSkipOptionClickRef.current) {
+      shouldSkipOptionClickRef.current = false;
+      return;
+    }
+
+    commitSelection(index);
   };
 
   const moveActive = (direction: 1 | -1) => {
@@ -640,7 +669,8 @@ function TaskDropdown({
                       aria-selected={isSelected}
                       className={`task-dropdown-option ${isSelected ? 'is-selected' : ''} ${isActive ? 'is-active' : ''}`}
                       style={{ animationDelay: `${index * 28}ms` }}
-                      onClick={() => commitSelection(index)}
+                      onPointerDown={(event) => handleOptionPointerDown(event, index)}
+                      onClick={() => handleOptionClick(index)}
                       onMouseEnter={() => setActiveIndex(index)}
                       onFocus={() => setActiveIndex(index)}
                       onKeyDown={(event) => handleOptionKeyDown(event, index)}
@@ -1240,11 +1270,24 @@ function App() {
       const isTasksMetric = barHoverMetric === 'tasks';
       const totalValue = isTasksMetric ? row.total : row.totalPoints;
       const totalLabel = isTasksMetric ? `${totalValue} tareas` : `${totalValue} pts`;
+      const dateLabel = String(label ?? row.day);
+
+      if (isMobileViewport) {
+        return (
+          <div className="min-w-[118px] rounded-xl border border-black/15 bg-white/88 px-2.5 py-2 shadow-[0_12px_26px_-22px_rgba(15,23,42,0.9)] backdrop-blur-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink/62">{dateLabel}</p>
+            <p className="mt-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-ink/55">
+              {isTasksMetric ? 'Total tareas' : 'Total puntos'}
+            </p>
+            <p className="mt-0.5 text-[14px] font-semibold text-ink/85">{totalLabel}</p>
+          </div>
+        );
+      }
 
       return (
-        <div className="min-w-[190px] rounded-2xl border border-[#715948]/20 bg-[#fffaf4]/95 px-3.5 py-3 shadow-[0_16px_40px_-24px_rgba(84,61,45,0.5)] backdrop-blur-[2px]">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7d6655]">
-            {String(label ?? row.day)}
+        <div className="min-w-[178px] rounded-2xl border border-black/15 bg-white/92 px-3.5 py-3 shadow-[0_16px_36px_-22px_rgba(15,23,42,0.66)] backdrop-blur-sm">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/58">
+            {dateLabel}
           </p>
 
           <div className="space-y-1.5">
@@ -1254,8 +1297,8 @@ function App() {
               const metricValue = isTasksMetric ? `${tasks} tareas` : `${points} pts`;
 
               return (
-                <div key={member.userId} className="flex items-center justify-between gap-3 text-[13px]">
-                  <span className="flex items-center gap-2 font-medium text-[#4e3d31]">
+                <div key={member.userId} className="flex items-center justify-between gap-3 text-[12px]">
+                  <span className="flex items-center gap-2 font-medium text-ink/82">
                     <span
                       className="h-2 w-2 rounded-full"
                       style={{ backgroundColor: member.color }}
@@ -1263,19 +1306,19 @@ function App() {
                     />
                     {member.name}
                   </span>
-                  <span className="font-semibold text-[#5c4738]">{metricValue}</span>
+                  <span className="font-semibold text-ink/78">{metricValue}</span>
                 </div>
               );
             })}
           </div>
 
-          <div className="mt-2.5 border-t border-[#6d5342]/14 pt-2 text-[13px] font-semibold text-[#4b3b30]">
+          <div className="mt-2.5 border-t border-black/12 pt-2 text-[13px] font-semibold text-ink/82">
             Total diario: {totalLabel}
           </div>
         </div>
       );
     },
-    [barHoverMetric, data],
+    [barHoverMetric, data, isMobileViewport],
   );
 
   const weeklyTotal = data?.totalTasks ?? 0;
@@ -1295,10 +1338,21 @@ function App() {
       const hasRealData = weeklyTotal > 0;
       const share = hasRealData ? Math.round((entry.value / weeklyTotal) * 100) : 0;
 
+      if (isMobileViewport) {
+        return (
+          <div className="rounded-lg border border-black/15 bg-white/88 px-2.5 py-2 shadow-[0_10px_24px_-20px_rgba(15,23,42,0.8)] backdrop-blur-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.11em] text-ink/62">{entry.name}</p>
+            <p className="mt-0.5 text-[12px] font-semibold text-ink/85">
+              {hasRealData ? `${entry.value} · ${share}%` : '0 · 0%'}
+            </p>
+          </div>
+        );
+      }
+
       return (
-        <div className="min-w-[168px] rounded-2xl border border-[#6b5545]/20 bg-[#fffaf4]/95 px-3 py-2.5 shadow-[0_14px_34px_-24px_rgba(84,61,45,0.48)]">
+        <div className="min-w-[164px] rounded-2xl border border-black/15 bg-white/92 px-3 py-2.5 shadow-[0_14px_30px_-22px_rgba(15,23,42,0.66)] backdrop-blur-sm">
           <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 text-[13px] font-medium text-[#4f3d31]">
+            <span className="flex items-center gap-2 text-[13px] font-medium text-ink/82">
               <span
                 className="h-2 w-2 rounded-full"
                 style={{ backgroundColor: entry.color }}
@@ -1306,17 +1360,17 @@ function App() {
               />
               {entry.name}
             </span>
-            <span className="text-[14px] font-semibold tabular-nums text-[#3f3128]">
+            <span className="text-[14px] font-semibold tabular-nums text-ink/85">
               {hasRealData ? `${entry.value}` : '0'}
             </span>
           </div>
-          <p className="mt-1.5 text-[11px] uppercase tracking-[0.11em] text-[#7c6656]">
+          <p className="mt-1.5 text-[11px] uppercase tracking-[0.11em] text-ink/58">
             {hasRealData ? `${share}% del total` : 'Sin actividad en el periodo'}
           </p>
         </div>
       );
     },
-    [weeklyTotal],
+    [isMobileViewport, weeklyTotal],
   );
 
   const renderPointsDistributionTooltip = useCallback(
@@ -1333,10 +1387,21 @@ function App() {
       const hasRealData = weeklyPointsTotal > 0;
       const share = hasRealData ? Math.round((entry.value / weeklyPointsTotal) * 100) : 0;
 
+      if (isMobileViewport) {
+        return (
+          <div className="rounded-lg border border-black/15 bg-white/88 px-2.5 py-2 shadow-[0_10px_24px_-20px_rgba(15,23,42,0.8)] backdrop-blur-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.11em] text-ink/62">{entry.name}</p>
+            <p className="mt-0.5 text-[12px] font-semibold text-ink/85">
+              {hasRealData ? `${entry.value} pts · ${share}%` : '0 pts · 0%'}
+            </p>
+          </div>
+        );
+      }
+
       return (
-        <div className="min-w-[168px] rounded-2xl border border-[#6b5545]/20 bg-[#fffaf4]/95 px-3 py-2.5 shadow-[0_14px_34px_-24px_rgba(84,61,45,0.48)]">
+        <div className="min-w-[164px] rounded-2xl border border-black/15 bg-white/92 px-3 py-2.5 shadow-[0_14px_30px_-22px_rgba(15,23,42,0.66)] backdrop-blur-sm">
           <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 text-[13px] font-medium text-[#4f3d31]">
+            <span className="flex items-center gap-2 text-[13px] font-medium text-ink/82">
               <span
                 className="h-2 w-2 rounded-full"
                 style={{ backgroundColor: entry.color }}
@@ -1344,17 +1409,17 @@ function App() {
               />
               {entry.name}
             </span>
-            <span className="text-[14px] font-semibold tabular-nums text-[#3f3128]">
+            <span className="text-[14px] font-semibold tabular-nums text-ink/85">
               {hasRealData ? `${entry.value} pts` : '0 pts'}
             </span>
           </div>
-          <p className="mt-1.5 text-[11px] uppercase tracking-[0.11em] text-[#7c6656]">
+          <p className="mt-1.5 text-[11px] uppercase tracking-[0.11em] text-ink/58">
             {hasRealData ? `${share}% del total` : 'Sin puntos en el periodo'}
           </p>
         </div>
       );
     },
-    [weeklyPointsTotal],
+    [isMobileViewport, weeklyPointsTotal],
   );
 
   const topMember = useMemo(() => {
@@ -3173,7 +3238,8 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     />
                     <Tooltip
                       shared={false}
-                      cursor={{ fill: 'rgba(128, 98, 76, 0.09)' }}
+                      cursor={isMobileViewport ? false : { fill: 'rgba(128, 98, 76, 0.09)' }}
+                      position={isMobileViewport ? { x: 10, y: 10 } : undefined}
                       wrapperStyle={{ outline: 'none' }}
                       content={renderDailyMetricsTooltip}
                     />
@@ -3267,9 +3333,17 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                       dataKey="totalPoints"
                       name="Total diario (pts)"
                       stroke="#51392d"
-                      strokeWidth={2.5}
-                      dot={{ r: 3, strokeWidth: 1, fill: '#ffffff' }}
-                      activeDot={{ r: 5 }}
+                      strokeWidth={isMobileViewport ? 2 : 2.5}
+                      dot={
+                        isMobileViewport
+                          ? { r: 1.8, strokeWidth: 0.8, fill: '#ffffff' }
+                          : { r: 3, strokeWidth: 1, fill: '#ffffff' }
+                      }
+                      activeDot={
+                        isMobileViewport
+                          ? { r: 3, strokeWidth: 1.1, fill: '#ffffff' }
+                          : { r: 5 }
+                      }
                     />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -3660,7 +3734,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
                     <div className="h-52 sm:h-56">
                       <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
+                        <PieChart accessibilityLayer={false}>
                           <Pie
                             data={donutData}
                             dataKey="value"
@@ -3668,12 +3742,15 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                             innerRadius={52}
                             outerRadius={78}
                             paddingAngle={2}
+                            rootTabIndex={-1}
                           >
                             {donutData.map((entry) => (
                               <Cell key={entry.name} fill={entry.color} />
                             ))}
                           </Pie>
                           <Tooltip
+                            cursor={false}
+                            position={isMobileViewport ? { x: 10, y: 10 } : undefined}
                             wrapperStyle={{ outline: 'none' }}
                             content={renderTasksDistributionTooltip}
                           />
@@ -3720,7 +3797,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
                     <div className="h-52 sm:h-56">
                       <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
+                        <PieChart accessibilityLayer={false}>
                           <Pie
                             data={donutPointsData}
                             dataKey="value"
@@ -3728,12 +3805,15 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                             innerRadius={52}
                             outerRadius={78}
                             paddingAngle={2}
+                            rootTabIndex={-1}
                           >
                             {donutPointsData.map((entry) => (
                               <Cell key={entry.name} fill={entry.color} />
                             ))}
                           </Pie>
                           <Tooltip
+                            cursor={false}
+                            position={isMobileViewport ? { x: 10, y: 10 } : undefined}
                             wrapperStyle={{ outline: 'none' }}
                             content={renderPointsDistributionTooltip}
                           />
