@@ -3,8 +3,8 @@ import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type TouchEvent as ReactTouchEvent,
   useEffect,
   useId,
   useMemo,
@@ -460,14 +460,7 @@ function TaskDropdown({
     focusTrigger();
   };
 
-  const handleOptionPointerDown = (
-    event: ReactPointerEvent<HTMLButtonElement>,
-    index: number,
-  ) => {
-    if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
-      return;
-    }
-
+  const handleOptionTouchEnd = (event: ReactTouchEvent<HTMLButtonElement>, index: number) => {
     const nextOption = options[index];
     if (!nextOption || nextOption.disabled) {
       return;
@@ -475,6 +468,7 @@ function TaskDropdown({
 
     shouldSkipOptionClickRef.current = true;
     event.preventDefault();
+    event.stopPropagation();
     commitSelection(index);
   };
 
@@ -669,7 +663,7 @@ function TaskDropdown({
                       aria-selected={isSelected}
                       className={`task-dropdown-option ${isSelected ? 'is-selected' : ''} ${isActive ? 'is-active' : ''}`}
                       style={{ animationDelay: `${index * 28}ms` }}
-                      onPointerDown={(event) => handleOptionPointerDown(event, index)}
+                      onTouchEnd={(event) => handleOptionTouchEnd(event, index)}
                       onClick={() => handleOptionClick(index)}
                       onMouseEnter={() => setActiveIndex(index)}
                       onFocus={() => setActiveIndex(index)}
