@@ -12,7 +12,7 @@ import App from './App';
 import './index.css';
 
 const QUERY_CACHE_STORAGE_KEY = 'nuestrohogar:react-query-cache:v2';
-const QUERY_CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutos
+const QUERY_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 días
 
 interface PersistedQueryCache {
   timestamp: number;
