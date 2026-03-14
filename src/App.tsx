@@ -134,6 +134,8 @@ interface ChartLegendProps {
 }
 
 type AuthMode = 'sign-in' | 'sign-up';
+type CommunityTaskPanel = 'list' | 'create';
+type CommunityTaskListSortMode = 'category' | 'points_desc' | 'points_asc';
 
 function isThemeMode(value: string | null): value is ThemeMode {
   return value === 'light' || value === 'dark' || value === 'system';
@@ -905,7 +907,7 @@ function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!isMounted) {
         return;
       }
@@ -914,6 +916,20 @@ function App() {
       if (nextSession) {
         setLoginError(null);
         setLoginSuccess(null);
+      }
+
+      if (event === 'SIGNED_IN' && typeof window !== 'undefined') {
+        const prefersReducedMotion =
+          typeof window.matchMedia === 'function' &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        window.requestAnimationFrame(() => {
+          window.scrollTo({
+            top: 0,
+            left: 0,
+            behavior: prefersReducedMotion ? 'auto' : 'smooth',
+          });
+        });
       }
     });
 
@@ -1194,8 +1210,10 @@ function App() {
   const [newCategoryName, setNewCategoryName] = useState('');
   const [communityTaskScore, setCommunityTaskScore] = useState(4);
   const [toasts, setToasts] = useState<AppToast[]>([]);
-  const [isMobileTasksOpen, setIsMobileTasksOpen] = useState(true);
-  const [isMobileCreateTaskOpen, setIsMobileCreateTaskOpen] = useState(false);
+  const [communityTaskPanel, setCommunityTaskPanel] = useState<CommunityTaskPanel>('list');
+  const [communityTaskListSortMode, setCommunityTaskListSortMode] =
+    useState<CommunityTaskListSortMode>('category');
+  const [isCommunityTaskSortMenuOpen, setIsCommunityTaskSortMenuOpen] = useState(false);
   const [taskToDelete, setTaskToDelete] = useState<CommunityTask | null>(null);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isCommunitiesMenuOpen, setIsCommunitiesMenuOpen] = useState(false);
@@ -1217,6 +1235,7 @@ function App() {
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const communitiesMenuRef = useRef<HTMLDivElement | null>(null);
   const inviteLinkPanelRef = useRef<HTMLDivElement | null>(null);
+  const communityTaskSortMenuRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDayLabel = useMemo(() => toDayWithMonthNumberLabel(taskDate), [taskDate]);
   const todayIsoDate = useMemo(() => getTodayIsoDate(), []);
@@ -1732,6 +1751,53 @@ function App() {
     ? getScoreBadgeClass(selectedCommunityTask.score)
     : 'border-black/12 bg-white/70 text-ink/60';
   const createTaskScoreBadgeClass = getScoreBadgeClass(communityTaskScore);
+  const communityTaskSortOptions: { label: string; value: CommunityTaskListSortMode }[] = [
+    { label: 'Categorías (A-Z)', value: 'category' },
+    { label: 'Pts descendente', value: 'points_desc' },
+    { label: 'Pts creciente', value: 'points_asc' },
+  ];
+  const communityTaskListSections = useMemo(() => {
+    if (communityTasks.length === 0) {
+      return [] as { key: string; label: string | null; tasks: CommunityTask[] }[];
+    }
+
+    if (communityTaskListSortMode === 'category') {
+      const groupedByCategory = new Map<string, CommunityTask[]>();
+
+      for (const task of communityTasks) {
+        const category = task.category.trim();
+        const bucket = groupedByCategory.get(category) ?? [];
+        bucket.push(task);
+        groupedByCategory.set(category, bucket);
+      }
+
+      return Array.from(groupedByCategory.entries())
+        .sort(([leftCategory], [rightCategory]) => leftCategory.localeCompare(rightCategory, 'es'))
+        .map(([category, tasks]) => ({
+          key: `category-${category}`,
+          label: null,
+          tasks: [...tasks].sort((leftTask, rightTask) => leftTask.name.localeCompare(rightTask.name, 'es')),
+        }));
+    }
+
+    const pointsDirection = communityTaskListSortMode === 'points_desc' ? -1 : 1;
+    const sortedTasks = [...communityTasks].sort((leftTask, rightTask) => {
+      const scoreDiff = (leftTask.score - rightTask.score) * pointsDirection;
+      if (scoreDiff !== 0) {
+        return scoreDiff;
+      }
+
+      return leftTask.name.localeCompare(rightTask.name, 'es');
+    });
+
+    return [
+      {
+        key: communityTaskListSortMode,
+        label: null,
+        tasks: sortedTasks,
+      },
+    ];
+  }, [communityTaskListSortMode, communityTasks]);
   const createCategoryOptions = useMemo(
     () =>
       taskCategories.map((category) => ({
@@ -1933,6 +1999,37 @@ function App() {
       window.removeEventListener('touchstart', handlePointerOutside);
     };
   }, [inviteLinkValue, isInviteLinkExpanded]);
+
+  useEffect(() => {
+    if (!isCommunityTaskSortMenuOpen) {
+      return;
+    }
+
+    const handlePointerOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node;
+      if (
+        communityTaskSortMenuRef.current &&
+        !communityTaskSortMenuRef.current.contains(target)
+      ) {
+        setIsCommunityTaskSortMenuOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsCommunityTaskSortMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerOutside);
+    window.addEventListener('touchstart', handlePointerOutside);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerOutside);
+      window.removeEventListener('touchstart', handlePointerOutside);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [isCommunityTaskSortMenuOpen]);
 
   const showToast = (message: string, variant: ToastVariant = 'success') => {
     const id = `toast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -2495,7 +2592,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
   if (!session) {
     const authPanelTitle = authMode === 'sign-up' ? 'Crear cuenta' : 'Bienvenido';
     const authPanelSubtitle = authMode === 'sign-up' ? 'Crear cuenta' : 'Iniciar sesión';
-    const authButtonLabel = authMode === 'sign-up' ? 'Crear cuenta en Supabase' : 'Entrar a mi comunidad';
+    const authButtonLabel = authMode === 'sign-up' ? 'Crear cuenta' : 'Entrar a mi comunidad';
     const authButtonLoadingLabel = authMode === 'sign-up' ? 'Creando cuenta...' : 'Ingresando...';
 
     return (
@@ -2509,18 +2606,12 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
             <div className="relative grid gap-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
               <article>
                 <p className="text-xs uppercase tracking-[0.22em] text-ink/55">Portal Privado</p>
-                <h1 className="mt-2 max-w-lg font-heading text-4xl leading-tight text-ink sm:text-5xl">
-                  Entra a tu comunidad y registra tus tareas reales
+                <h1 className="mt-2 max-w-lg font-heading text-3xl leading-tight text-ink sm:text-[2.7rem]">
+                  Comunidades Justas y Armoniozas
                 </h1>
                 <p className="mt-4 max-w-xl text-sm text-ink/72 sm:text-base">
-                  Inicia sesión o crea una cuenta con Supabase para ver integrantes, tareas de la
-                  comunidad y métricas del período.
+                  registren sus Tareas diarias y trabajen en equipo
                 </p>
-                <div className="mt-6 grid gap-2 text-sm text-ink/70">
-                  <p>1. Entra con tu correo o crea una cuenta nueva.</p>
-                  <p>2. La app carga tu comunidad activa automáticamente.</p>
-                  <p>3. Desde ahí ya puedes registrar tareas y puntos.</p>
-                </div>
                 {inviteToken && (
                   <p className="mt-4 max-w-lg rounded-xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-800">
                     Tienes una invitación pendiente. Inicia sesión y te uniremos automáticamente.
@@ -3087,9 +3178,6 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
           <h1 className="font-heading text-3xl leading-tight text-ink sm:text-5xl">
             {data?.communityName ?? 'Cargando comunidad...'}
           </h1>
-          <p className="mt-2 max-w-2xl text-sm text-ink/70 sm:text-base">
-            Vista general de tareas del hogar, integrantes activos y progreso semanal.
-          </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {canInviteToCommunity && (
               <button
@@ -3104,7 +3192,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
             {inviteLinkValue && (
               <div
                 ref={inviteLinkPanelRef}
-                className="w-full rounded-xl border border-sky-200/80 bg-transparent p-2.5"
+                className="w-full rounded-2xl border border-[color:var(--button-primary-border)] bg-white/5 p-3"
               >
                 <button
                   type="button"
@@ -3116,7 +3204,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     Link de invitación
                   </p>
                   <span
-                    className={`inline-flex h-5 w-5 items-center justify-center rounded-full border border-sky-300 bg-white text-sky-700 transition ${
+                    className={`inline-flex h-5 w-5 items-center justify-center rounded-full border border-[color:var(--button-primary-border)] bg-white text-sky-700 transition ${
                       isInviteLinkExpanded ? 'rotate-180' : ''
                     }`}
                     aria-hidden
@@ -3136,23 +3224,23 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
 
                 {isInviteLinkExpanded && (
                   <>
-                    <div className="mt-1.5 flex flex-col gap-1.5 sm:flex-row">
+                    <div className="mt-2 flex items-center gap-2 rounded-xl border border-[color:var(--button-primary-border)] bg-white/5 p-2">
                       <input
                         type="text"
                         readOnly
                         value={inviteLinkValue}
-                        className="w-full rounded-lg border border-sky-300 bg-sky-50/10 px-3 py-1.5 text-xs text-sky-900 outline-none"
+                        className="min-w-0 flex-1 rounded-lg border border-transparent bg-white/5 px-3 py-1.5 text-xs text-sky-100/95 outline-none"
                       />
                       <button
                         type="button"
                         onClick={handleCopyInviteLink}
-                        className="rounded-lg border border-sky-300 bg-sky-50/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-sky-800 transition hover:border-sky-500 hover:bg-sky-100/40"
+                        className="inline-flex h-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--button-primary-border)] bg-transparent px-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-sky-200/90 transition hover:text-sky-100"
                       >
                         Copiar
                       </button>
                     </div>
                     {inviteLinkExpiresAt && (
-                      <p className="mt-1.5 text-[11px] text-sky-800/90">
+                      <p className="mt-2 text-[11px] text-sky-200/75">
                         Expira: {formatDateTimeLabel(inviteLinkExpiresAt)}
                       </p>
                     )}
@@ -3161,38 +3249,125 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
               </div>
             )}
           </div>
-        </section>
 
-        <section
-          id="tareas-comunidad"
-          className="panel relative z-20 animate-rise p-4 [animation-delay:130ms] sm:p-8"
-        >
-          <div className="mb-5">
-            <h2 className="font-heading text-[1.8rem] leading-tight text-ink sm:text-3xl">
-              Tareas de la Comunidad
-            </h2>
-          </div>
-
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-4">
-            <article className="space-y-3 rounded-2xl border border-black/10 bg-white/80 p-3.5 sm:p-4">
-              <div className="flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => setIsMobileTasksOpen((previous) => !previous)}
-                  className="flex items-center gap-2 text-left lg:cursor-default"
-                  aria-expanded={isMobileTasksOpen}
-                >
-                  <h3 className="font-heading text-2xl text-ink">Tareas</h3>
-                  <span className="rounded-full border border-black/15 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70 lg:hidden">
-                    {isMobileTasksOpen ? 'Ocultar' : 'Ver'}
-                  </span>
-                </button>
-                <span className="rounded-full bg-stone-800/85 px-3 py-1 text-xs uppercase tracking-[0.13em] text-white">
-                  {communityTasks.length} creadas
-                </span>
+          <div className="mt-6 pt-1">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-heading text-[1.35rem] leading-tight text-ink sm:text-[2rem]">
+                  Tareas de la Comunidad
+                </h2>
               </div>
+              <span className="rounded-full border border-black/15 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink/72">
+                {communityTasks.length} creadas
+              </span>
+            </div>
 
-              <div className={`${isMobileTasksOpen ? 'block' : 'hidden'} lg:block`}>
+            <div
+              role="tablist"
+              aria-label="Opciones de tareas de la comunidad"
+              className="mt-4 inline-flex w-full rounded-2xl border border-black/12 bg-white/70 p-1 sm:w-auto"
+            >
+              <button
+                id="community-task-tab-list"
+                type="button"
+                role="tab"
+                aria-selected={communityTaskPanel === 'list'}
+                aria-controls="community-task-panel-list"
+                onClick={() => setCommunityTaskPanel('list')}
+                className={`flex-1 rounded-[0.85rem] px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] transition sm:flex-none ${
+                  communityTaskPanel === 'list'
+                    ? 'bg-stone-900 text-white shadow-sm'
+                    : 'text-ink/65 hover:bg-white hover:text-ink/80'
+                }`}
+              >
+                Ver listado
+              </button>
+              <button
+                id="community-task-tab-create"
+                type="button"
+                role="tab"
+                aria-selected={communityTaskPanel === 'create'}
+                aria-controls="community-task-panel-create"
+                onClick={() => setCommunityTaskPanel('create')}
+                className={`flex-1 rounded-[0.85rem] px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] transition sm:flex-none ${
+                  communityTaskPanel === 'create'
+                    ? 'bg-stone-900 text-white shadow-sm'
+                    : 'text-ink/65 hover:bg-white hover:text-ink/80'
+                }`}
+              >
+                Crear nueva
+              </button>
+            </div>
+
+            {communityTaskPanel === 'list' && (
+              <>
+                <div className="mt-4 flex justify-center">
+                  <div ref={communityTaskSortMenuRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsCommunityTaskSortMenuOpen((previous) => !previous)}
+                      aria-expanded={isCommunityTaskSortMenuOpen}
+                      aria-controls="community-task-sort-menu"
+                      aria-label="Filtrar listado de tareas"
+                      title="Filtrar listado de tareas"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--button-primary-border)] bg-[color:var(--card)] text-[color:var(--button-primary-border)] transition hover:bg-[color:var(--card)]/90"
+                    >
+                      <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden>
+                        <path
+                          fill="currentColor"
+                          d="M3.5 4.5A1.5 1.5 0 0 1 5 3h10a1.5 1.5 0 0 1 1.2 2.4l-3.9 5.2a1.5 1.5 0 0 0-.3.9V15a1 1 0 0 1-.45.83l-2 1.33A1 1 0 0 1 8 16.33v-4.84a1.5 1.5 0 0 0-.3-.9L3.8 5.4a1.5 1.5 0 0 1-.3-.9Z"
+                        />
+                      </svg>
+                    </button>
+
+                    {isCommunityTaskSortMenuOpen && (
+                      <div
+                        id="community-task-sort-menu"
+                        className="absolute left-1/2 top-[calc(100%+0.45rem)] z-30 min-w-[220px] -translate-x-1/2 rounded-xl border border-[color:var(--button-primary-border)] bg-[color:var(--card)] p-1.5 shadow-lg backdrop-blur-sm"
+                      >
+                        {communityTaskSortOptions.map((option) => {
+                          const isActive = communityTaskListSortMode === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => {
+                                setCommunityTaskListSortMode(option.value);
+                                setIsCommunityTaskSortMenuOpen(false);
+                              }}
+                              className="flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] transition"
+                              style={
+                                isActive
+                                  ? {
+                                      borderColor: 'var(--button-primary-border)',
+                                      background: 'var(--button-primary-bg)',
+                                      color: 'var(--button-primary-text)',
+                                      boxShadow: 'var(--button-primary-shadow)',
+                                    }
+                                  : {
+                                      borderColor: 'transparent',
+                                      background: 'transparent',
+                                      color: 'color-mix(in oklab, var(--foreground) 68%, transparent)',
+                                    }
+                              }
+                            >
+                              <span>{option.label}</span>
+                              {isActive && <span aria-hidden>✓</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <article
+                  id="community-task-panel-list"
+                  role="tabpanel"
+                  aria-labelledby="community-task-tab-list"
+                  className="mt-3 space-y-3 rounded-2xl border border-black/10 bg-white/80 p-3.5 sm:p-4"
+                >
+
                 {communityTasks.length === 0 && (
                   <p className="rounded-xl border border-dashed border-black/20 bg-white/70 px-3 py-2 text-sm text-ink/65">
                     Aún no hay tareas creadas.
@@ -3206,45 +3381,57 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                         communityTasks.length > 5 ? 'task-list-scroll-mobile' : ''
                       }`}
                     >
-                      {communityTasks.map(renderCommunityTask)}
+                      {communityTaskListSections.map((section) => (
+                        <div key={`mobile-${section.key}`} className="space-y-2.5">
+                          {section.label && (
+                            <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink/58">
+                              {section.label}
+                            </p>
+                          )}
+                          <div className="task-list-stack">{section.tasks.map(renderCommunityTask)}</div>
+                        </div>
+                      ))}
                     </div>
 
                     <div
                       className={`hidden lg:block ${communityTasks.length > 4 ? 'task-list-scroll' : ''}`}
                     >
-                      <div className="task-list-stack">{communityTasks.map(renderCommunityTask)}</div>
+                      <div className="space-y-3">
+                        {communityTaskListSections.map((section) => (
+                          <div key={`desktop-${section.key}`} className="space-y-2.5">
+                            {section.label && (
+                              <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink/58">
+                                {section.label}
+                              </p>
+                            )}
+                            <div className="task-list-stack">{section.tasks.map(renderCommunityTask)}</div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </>
                 )}
-              </div>
-            </article>
+                </article>
+              </>
+            )}
 
-            <form
-              onSubmit={handleCommunityTaskCreate}
-              className="space-y-5 rounded-2xl border border-black/10 bg-white/80 p-4 sm:p-5"
-            >
-              <button
-                type="button"
-                onClick={() => setIsMobileCreateTaskOpen((previous) => !previous)}
-                className="flex w-full items-center justify-between gap-2 text-left lg:cursor-default"
-                aria-expanded={isMobileCreateTaskOpen}
+            {communityTaskPanel === 'create' && (
+              <form
+                id="community-task-panel-create"
+                role="tabpanel"
+                aria-labelledby="community-task-tab-create"
+                onSubmit={handleCommunityTaskCreate}
+                className="mt-4 space-y-5 rounded-2xl border border-black/10 bg-white/80 p-4 sm:p-5"
               >
-                <div className="flex items-center gap-2">
-                  <h3 className="font-heading text-2xl text-ink">Crear tarea</h3>
-                  <span className="rounded-full border border-black/15 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/70 lg:hidden">
-                    {isMobileCreateTaskOpen ? 'Ocultar' : 'Abrir'}
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-heading text-2xl text-ink">Nueva tarea</h3>
+                  <span
+                    className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${createTaskScoreBadgeClass}`}
+                  >
+                    {communityTaskScore} pts
                   </span>
                 </div>
-                <span
-                  className={`hidden rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] sm:inline-flex ${createTaskScoreBadgeClass}`}
-                >
-                  {communityTaskScore} pts
-                </span>
-              </button>
 
-              <div
-                className={`${isMobileCreateTaskOpen ? 'space-y-5 pt-1' : 'hidden'} lg:block lg:space-y-5 lg:pt-1`}
-              >
                 <label className="space-y-2">
                   <span className="metric-label">Nombre de la tarea</span>
                   <div className="task-field-shell">
@@ -3327,8 +3514,8 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     Guardar tarea
                   </button>
                 </div>
-              </div>
-            </form>
+              </form>
+            )}
           </div>
         </section>
 
