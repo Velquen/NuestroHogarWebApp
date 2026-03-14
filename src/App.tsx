@@ -2578,7 +2578,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     value={loginEmail}
                     onChange={(event) => setLoginEmail(event.target.value)}
                     placeholder="tu@correo.com"
-                    className="w-full rounded-xl border border-black/12 bg-white/92 px-3 py-2.5 text-sm text-ink outline-none transition focus:border-black/30"
+                    className="w-full rounded-xl border border-black/12 bg-white/92 px-3 py-2.5 text-base text-ink outline-none transition focus:border-black/30 sm:text-sm"
                   />
                 </label>
 
@@ -2590,7 +2590,7 @@ VITE_SUPABASE_ANON_KEY=<publishable_key>`}
                     value={loginPassword}
                     onChange={(event) => setLoginPassword(event.target.value)}
                     placeholder="••••••••"
-                    className="w-full rounded-xl border border-black/12 bg-white/92 px-3 py-2.5 text-sm text-ink outline-none transition focus:border-black/30"
+                    className="w-full rounded-xl border border-black/12 bg-white/92 px-3 py-2.5 text-base text-ink outline-none transition focus:border-black/30 sm:text-sm"
                   />
                 </label>
 
