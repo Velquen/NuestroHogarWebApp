@@ -1113,16 +1113,36 @@ function App() {
     };
   }, [themeMode]);
 
+  const isDashboardQueryEnabled =
+    isSupabaseConfigured &&
+    isAuthReady &&
+    Boolean(session) &&
+    !isInviteJoinPending &&
+    !isAcceptingInvite;
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['community-dashboard', session?.user.id, selectedCommunityId, activityRange],
     queryFn: () => fetchCommunityDashboard(selectedCommunityId, activityRange),
-    enabled:
-      isSupabaseConfigured &&
-      isAuthReady &&
-      Boolean(session) &&
-      !isInviteJoinPending &&
-      !isAcceptingInvite,
+    enabled: isDashboardQueryEnabled,
   });
+
+  useEffect(() => {
+    if (!isDashboardQueryEnabled || !session?.user.id) {
+      return;
+    }
+
+    const ranges: ActivityRange[] = ['week', 'month'];
+
+    void Promise.all(
+      ranges.map((range) =>
+        queryClient.prefetchQuery({
+          queryKey: ['community-dashboard', session.user.id, selectedCommunityId, range],
+          queryFn: () => fetchCommunityDashboard(selectedCommunityId, range),
+          staleTime: 1000 * 60 * 5,
+        }),
+      ),
+    );
+  }, [isDashboardQueryEnabled, queryClient, selectedCommunityId, session?.user.id]);
 
   const activeCommunityId = data?.communityId ?? null;
   const { data: tasksData = EMPTY_TASKS } = useQuery({
